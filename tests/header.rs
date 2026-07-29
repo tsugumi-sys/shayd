@@ -1,4 +1,4 @@
-use suzumedb::DatabaseHeader;
+use oxlite::DatabaseHeader;
 
 #[test]
 fn parses_minimal_sqlite_header_bytes() {

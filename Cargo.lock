@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "suzumedb"
+name = "oxlite"
 version = "0.1.0"
