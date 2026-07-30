@@ -2,7 +2,7 @@ mod common;
 
 use std::fs;
 
-use oxlite::{BtreePage, PageType, Pager, Schema, SchemaObjectType, Value, scan_table_page};
+use oxlite::{BtreePage, Database, PageType, Pager, Schema, SchemaObjectType, Value, scan_table};
 
 #[test]
 fn simple_fixture_is_available() {
@@ -58,6 +58,16 @@ fn loads_schema_from_simple_fixture() {
         table.sql.as_deref(),
         Some("CREATE TABLE t (\n  a INTEGER,\n  b TEXT\n)")
     );
+    assert_eq!(
+        schema
+            .table_schema("t")
+            .unwrap()
+            .columns
+            .iter()
+            .map(|column| column.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["a", "b"]
+    );
 }
 
 #[test]
@@ -65,7 +75,7 @@ fn scans_rows_from_simple_fixture_table() {
     let db_path = common::fixture_path("simple.db");
     let expected_path = common::fixture_path("simple.expected");
     let mut pager = Pager::open(&db_path).unwrap();
-    let rows = scan_table_page(&mut pager, 2).unwrap();
+    let rows = scan_table(&mut pager, 2).unwrap();
 
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].rowid, 1);
@@ -77,6 +87,62 @@ fn scans_rows_from_simple_fixture_table() {
     assert_eq!(
         rows[1].values,
         vec![Value::Integer(20), Value::Text("beta".to_owned())]
+    );
+    assert_eq!(
+        rows_to_sqlite_output(&rows),
+        fs::read_to_string(expected_path).unwrap()
+    );
+}
+
+#[test]
+fn database_api_scans_simple_fixture_table() {
+    let db_path = common::fixture_path("simple.db");
+    let expected_path = common::fixture_path("simple.expected");
+    let mut database = Database::open(&db_path).unwrap();
+
+    assert_eq!(database.schema().table("t").unwrap().root_page, Some(2));
+
+    let rows = database.scan_table("t").unwrap();
+
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        rows_to_sqlite_output(&rows),
+        fs::read_to_string(expected_path).unwrap()
+    );
+}
+
+#[test]
+fn scans_rows_from_multipage_fixture_table() {
+    let db_path = common::fixture_path("multipage.db");
+    let expected_path = common::fixture_path("multipage.expected");
+    let mut database = Database::open(&db_path).unwrap();
+
+    assert_eq!(database.schema().table("big").unwrap().root_page, Some(2));
+
+    let mut pager = Pager::open(&db_path).unwrap();
+    let root_page = pager.read_page(2).unwrap();
+    let root_btree_page = BtreePage::parse(&root_page).unwrap();
+
+    assert_eq!(root_btree_page.header().page_type, PageType::TableInterior);
+
+    let rows = database.scan_table("big").unwrap();
+
+    assert_eq!(rows.len(), 120);
+    assert_eq!(rows[0].rowid, 1);
+    assert_eq!(
+        rows[0].values,
+        vec![
+            Value::Integer(1),
+            Value::Text("row-001-abcdefghijklmnopqrstuvwxyz".to_owned())
+        ]
+    );
+    assert_eq!(rows[119].rowid, 120);
+    assert_eq!(
+        rows[119].values,
+        vec![
+            Value::Integer(120),
+            Value::Text("row-120-abcdefghijklmnopqrstuvwxyz".to_owned())
+        ]
     );
     assert_eq!(
         rows_to_sqlite_output(&rows),

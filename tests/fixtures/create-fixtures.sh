@@ -2,11 +2,20 @@
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-DB="$SCRIPT_DIR/simple.db"
-SQL="$SCRIPT_DIR/simple.sql"
-EXPECTED="$SCRIPT_DIR/simple.expected"
 
-rm -f "$DB" "$EXPECTED"
+create_fixture() {
+  name=$1
+  query=$2
 
-sqlite3 "$DB" < "$SQL"
-sqlite3 "$DB" "SELECT rowid, a, b FROM t ORDER BY rowid;" > "$EXPECTED"
+  db="$SCRIPT_DIR/$name.db"
+  sql="$SCRIPT_DIR/$name.sql"
+  expected="$SCRIPT_DIR/$name.expected"
+
+  rm -f "$db" "$expected"
+
+  sqlite3 "$db" < "$sql"
+  sqlite3 "$db" "$query" > "$expected"
+}
+
+create_fixture simple "SELECT rowid, a, b FROM t ORDER BY rowid;"
+create_fixture multipage "SELECT rowid, a, b FROM big ORDER BY rowid;"

@@ -61,6 +61,12 @@ pub struct TableLeafCell<'a> {
     pub record: Record,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TableInteriorCell {
+    pub left_child_page: u32,
+    pub rowid: i64,
+}
+
 impl BtreePage {
     pub fn parse(page: &Page) -> Result<Self> {
         let bytes = page.bytes();
@@ -166,6 +172,22 @@ impl BtreePage {
             .map(|cell_offset| TableLeafCell::parse(page, usize::from(*cell_offset)))
             .collect()
     }
+
+    pub fn table_interior_cells(&self, page: &Page) -> Result<Vec<TableInteriorCell>> {
+        if self.page_number != page.number() {
+            return Err(Error::InvalidBtreePage(
+                "parsed b-tree page does not match source page",
+            ));
+        }
+        if self.header.page_type != PageType::TableInterior {
+            return Err(Error::InvalidBtreePage("expected table interior page"));
+        }
+
+        self.cell_pointers
+            .iter()
+            .map(|cell_offset| TableInteriorCell::parse(page, usize::from(*cell_offset)))
+            .collect()
+    }
 }
 
 impl<'a> TableLeafCell<'a> {
@@ -204,6 +226,29 @@ impl<'a> TableLeafCell<'a> {
             rowid: rowid as i64,
             payload,
             record,
+        })
+    }
+}
+
+impl TableInteriorCell {
+    fn parse(page: &Page, offset: usize) -> Result<Self> {
+        let bytes = page.bytes();
+        let left_child_page = read_u32(bytes, offset)?;
+        if left_child_page == 0 {
+            return Err(Error::InvalidBtreePage(
+                "table interior child page cannot be zero",
+            ));
+        }
+
+        let key_offset = offset + 4;
+        let key = bytes
+            .get(key_offset..)
+            .ok_or_else(|| Error::truncated("table interior cell", key_offset + 1, bytes.len()))?;
+        let (rowid, _) = varint::decode(key)?;
+
+        Ok(Self {
+            left_child_page,
+            rowid: rowid as i64,
         })
     }
 }
@@ -362,6 +407,31 @@ mod tests {
                 "overflow table leaf payloads are not supported"
             ))
         ));
+    }
+
+    #[test]
+    fn parses_table_interior_cell_child_and_rowid() {
+        let mut bytes = vec![0; 512];
+        bytes[0] = 0x05;
+        bytes[3..5].copy_from_slice(&1_u16.to_be_bytes());
+        bytes[5..7].copy_from_slice(&500_u16.to_be_bytes());
+        bytes[8..12].copy_from_slice(&9_u32.to_be_bytes());
+        bytes[12..14].copy_from_slice(&500_u16.to_be_bytes());
+        bytes[500..504].copy_from_slice(&3_u32.to_be_bytes());
+        bytes[504] = 42;
+        let page = Page::new(2, bytes);
+
+        let btree_page = BtreePage::parse(&page).unwrap();
+        let cells = btree_page.table_interior_cells(&page).unwrap();
+
+        assert_eq!(btree_page.header().right_most_pointer, Some(9));
+        assert_eq!(
+            cells,
+            vec![TableInteriorCell {
+                left_child_page: 3,
+                rowid: 42
+            }]
+        );
     }
 
     fn page_with_leaf_header(number: u32, offset: usize, cell_offsets: &[u16]) -> Page {
