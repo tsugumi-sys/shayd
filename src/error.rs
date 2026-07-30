@@ -17,6 +17,7 @@ pub enum Error {
         needed: usize,
         available: usize,
     },
+    Unsupported(&'static str),
     Utf8(std::str::Utf8Error),
 }
 
@@ -59,6 +60,7 @@ impl fmt::Display for Error {
                 f,
                 "truncated {context}: needed {needed} bytes, available {available}"
             ),
+            Self::Unsupported(message) => write!(f, "unsupported SQLite feature: {message}"),
             Self::Utf8(err) => write!(f, "invalid UTF-8 text: {err}"),
         }
     }
