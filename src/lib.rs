@@ -1,13 +1,13 @@
-pub mod btree;
-pub mod database;
-pub mod error;
-pub mod header;
-pub mod pager;
-pub mod query;
-pub mod record;
-pub mod schema;
-pub mod table;
-pub mod varint;
+mod btree;
+mod database;
+mod error;
+mod header;
+mod pager;
+mod query;
+mod record;
+mod schema;
+mod table;
+mod varint;
 
 pub use btree::{BtreePage, BtreePageHeader, PageType, TableInteriorCell, TableLeafCell};
 pub use database::Database;
