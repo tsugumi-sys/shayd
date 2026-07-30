@@ -62,6 +62,14 @@ pub struct TableLeafCell<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TableLeafPayload<'a> {
+    pub payload_size: usize,
+    pub rowid: i64,
+    pub local_payload: &'a [u8],
+    pub first_overflow_page: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TableInteriorCell {
     pub left_child_page: u32,
     pub rowid: i64,
@@ -173,6 +181,28 @@ impl BtreePage {
             .collect()
     }
 
+    pub fn table_leaf_payloads<'a>(
+        &self,
+        page: &'a Page,
+        usable_size: usize,
+    ) -> Result<Vec<TableLeafPayload<'a>>> {
+        if self.page_number != page.number() {
+            return Err(Error::InvalidBtreePage(
+                "parsed b-tree page does not match source page",
+            ));
+        }
+        if self.header.page_type != PageType::TableLeaf {
+            return Err(Error::InvalidBtreePage("expected table leaf page"));
+        }
+
+        self.cell_pointers
+            .iter()
+            .map(|cell_offset| {
+                TableLeafPayload::parse(page, usize::from(*cell_offset), usable_size)
+            })
+            .collect()
+    }
+
     pub fn table_interior_cells(&self, page: &Page) -> Result<Vec<TableInteriorCell>> {
         if self.page_number != page.number() {
             return Err(Error::InvalidBtreePage(
@@ -192,7 +222,31 @@ impl BtreePage {
 
 impl<'a> TableLeafCell<'a> {
     fn parse(page: &'a Page, offset: usize) -> Result<Self> {
+        let payload = TableLeafPayload::parse(page, offset, page.bytes().len())?;
+        if payload.first_overflow_page.is_some() {
+            return Err(Error::Unsupported(
+                "overflow table leaf payloads require a pager",
+            ));
+        }
+
+        let record = Record::decode(payload.local_payload)?;
+
+        Ok(Self {
+            payload_size: payload.payload_size,
+            rowid: payload.rowid,
+            payload: payload.local_payload,
+            record,
+        })
+    }
+}
+
+impl<'a> TableLeafPayload<'a> {
+    fn parse(page: &'a Page, offset: usize, usable_size: usize) -> Result<Self> {
         let bytes = page.bytes();
+        if usable_size > bytes.len() {
+            return Err(Error::InvalidBtreePage("usable size exceeds page size"));
+        }
+
         let cell = bytes
             .get(offset..)
             .ok_or_else(|| Error::truncated("table leaf cell", offset + 1, bytes.len()))?;
@@ -206,26 +260,42 @@ impl<'a> TableLeafCell<'a> {
             .checked_add(payload_size_len)
             .and_then(|value| value.checked_add(rowid_len))
             .ok_or(Error::InvalidBtreePage("table leaf cell offset overflow"))?;
-        let payload_end =
+        let local_payload_size = table_leaf_local_payload_size(payload_size, usable_size)?;
+        let local_payload_end =
             payload_start
-                .checked_add(payload_size)
+                .checked_add(local_payload_size)
                 .ok_or(Error::InvalidBtreePage(
                     "table leaf payload offset overflow",
                 ))?;
-        if payload_end > bytes.len() {
-            return Err(Error::Unsupported(
-                "overflow table leaf payloads are not supported",
-            ));
+        if local_payload_end > usable_size {
+            return Err(Error::InvalidBtreePage("local payload is out of bounds"));
         }
 
-        let payload = &bytes[payload_start..payload_end];
-        let record = Record::decode(payload)?;
+        let first_overflow_page = if local_payload_size < payload_size {
+            let overflow_pointer_end = local_payload_end + 4;
+            if overflow_pointer_end > usable_size {
+                return Err(Error::truncated(
+                    "table leaf overflow pointer",
+                    overflow_pointer_end,
+                    usable_size,
+                ));
+            }
+            let page_number = read_u32(bytes, local_payload_end)?;
+            if page_number == 0 {
+                return Err(Error::InvalidBtreePage(
+                    "first overflow page cannot be zero",
+                ));
+            }
+            Some(page_number)
+        } else {
+            None
+        };
 
         Ok(Self {
             payload_size,
             rowid: rowid as i64,
-            payload,
-            record,
+            local_payload: &bytes[payload_start..local_payload_end],
+            first_overflow_page,
         })
     }
 }
@@ -263,6 +333,31 @@ fn parse_cell_content_area_offset(raw: u16, page_len: usize) -> Result<usize> {
         _ => Err(Error::InvalidBtreePage(
             "cell content area offset is out of bounds",
         )),
+    }
+}
+
+pub fn table_leaf_local_payload_size(payload_size: usize, usable_size: usize) -> Result<usize> {
+    if usable_size < 35 {
+        return Err(Error::InvalidBtreePage("usable size is too small"));
+    }
+
+    let max_leaf = usable_size - 35;
+    let min_leaf = ((usable_size - 12) * 32 / 255)
+        .checked_sub(23)
+        .ok_or(Error::InvalidBtreePage("usable size is too small"))?;
+
+    if payload_size <= max_leaf {
+        return Ok(payload_size);
+    }
+
+    let overflow_payload_capacity = usable_size
+        .checked_sub(4)
+        .ok_or(Error::InvalidBtreePage("usable size is too small"))?;
+    let surplus = min_leaf + ((payload_size - min_leaf) % overflow_payload_capacity);
+    if surplus <= max_leaf {
+        Ok(surplus)
+    } else {
+        Ok(min_leaf)
     }
 }
 
@@ -390,13 +485,15 @@ mod tests {
 
     #[test]
     fn rejects_overflow_table_leaf_payloads() {
+        let cell_offset = 450_usize;
         let mut bytes = vec![0; 512];
         bytes[0] = 0x0d;
         bytes[3..5].copy_from_slice(&1_u16.to_be_bytes());
-        bytes[5..7].copy_from_slice(&500_u16.to_be_bytes());
-        bytes[8..10].copy_from_slice(&500_u16.to_be_bytes());
-        bytes[500] = 20;
-        bytes[501] = 1;
+        bytes[5..7].copy_from_slice(&(cell_offset as u16).to_be_bytes());
+        bytes[8..10].copy_from_slice(&(cell_offset as u16).to_be_bytes());
+        bytes[cell_offset..cell_offset + 2].copy_from_slice(&[0x83, 0x5e]);
+        bytes[cell_offset + 2] = 1;
+        bytes[cell_offset + 42..cell_offset + 46].copy_from_slice(&3_u32.to_be_bytes());
         let page = Page::new(2, bytes);
 
         let btree_page = BtreePage::parse(&page).unwrap();
@@ -404,9 +501,18 @@ mod tests {
         assert!(matches!(
             btree_page.table_leaf_cells(&page),
             Err(Error::Unsupported(
-                "overflow table leaf payloads are not supported"
+                "overflow table leaf payloads require a pager"
             ))
         ));
+    }
+
+    #[test]
+    fn computes_table_leaf_local_payload_size_like_sqlite() {
+        assert_eq!(table_leaf_local_payload_size(477, 512).unwrap(), 477);
+        assert_eq!(table_leaf_local_payload_size(478, 512).unwrap(), 39);
+        assert_eq!(table_leaf_local_payload_size(545, 512).unwrap(), 39);
+        assert_eq!(table_leaf_local_payload_size(985, 512).unwrap(), 477);
+        assert_eq!(table_leaf_local_payload_size(986, 512).unwrap(), 39);
     }
 
     #[test]

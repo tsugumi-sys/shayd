@@ -1,8 +1,11 @@
 mod common;
 
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::{Seek, SeekFrom, Write};
 
-use oxlite::{BtreePage, Database, PageType, Pager, Schema, SchemaObjectType, Value, scan_table};
+use oxlite::{
+    BtreePage, Database, Error, PageType, Pager, Schema, SchemaObjectType, Value, scan_table,
+};
 
 #[test]
 fn simple_fixture_is_available() {
@@ -247,6 +250,67 @@ fn database_api_scans_named_rows_from_multipage_fixture_table() {
             "row-120-abcdefghijklmnopqrstuvwxyz".to_owned()
         ))
     );
+}
+
+#[test]
+fn scans_rows_from_overflow_fixture_table() {
+    let db_path = common::fixture_path("overflow.db");
+    let expected_path = common::fixture_path("overflow.expected");
+    let mut database = Database::open(&db_path).unwrap();
+
+    let rows = database.scan_table("large").unwrap();
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].rowid, 1);
+    assert_eq!(rows[0].values.len(), 2);
+    assert_eq!(rows[0].values[0], Value::Integer(1));
+    assert_eq!(rows[0].values[1], Value::Text("x".repeat(1800)));
+    assert_eq!(
+        rows_to_sqlite_output(&rows),
+        fs::read_to_string(expected_path).unwrap()
+    );
+}
+
+#[test]
+fn rejects_overflow_chain_that_ends_early() {
+    let source_path = common::fixture_path("overflow.db");
+    let db_path =
+        std::env::temp_dir().join(format!("oxlite-overflow-corrupt-{}.db", std::process::id()));
+    fs::copy(&source_path, &db_path).unwrap();
+
+    let mut pager = Pager::open(&db_path).unwrap();
+    let root_page_number = Schema::load(&mut pager)
+        .unwrap()
+        .table("large")
+        .unwrap()
+        .root_page
+        .unwrap();
+    let root_page = pager.read_page(root_page_number).unwrap();
+    let btree_page = BtreePage::parse(&root_page).unwrap();
+    let first_overflow_page = btree_page
+        .table_leaf_payloads(&root_page, pager.header().usable_space() as usize)
+        .unwrap()[0]
+        .first_overflow_page
+        .unwrap();
+
+    let page_size = pager.header().page_size.get() as u64;
+    drop(pager);
+
+    let mut file = OpenOptions::new().write(true).open(&db_path).unwrap();
+    file.seek(SeekFrom::Start(
+        u64::from(first_overflow_page - 1) * page_size,
+    ))
+    .unwrap();
+    file.write_all(&0_u32.to_be_bytes()).unwrap();
+
+    let mut database = Database::open(&db_path).unwrap();
+
+    assert!(matches!(
+        database.scan_table("large"),
+        Err(Error::InvalidBtreePage("overflow chain ended early"))
+    ));
+
+    fs::remove_file(db_path).unwrap();
 }
 
 fn rows_to_sqlite_output(rows: &[oxlite::Row]) -> String {

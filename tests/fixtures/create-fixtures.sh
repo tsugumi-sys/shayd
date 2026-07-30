@@ -19,3 +19,4 @@ create_fixture() {
 
 create_fixture simple "SELECT rowid, a, b FROM t ORDER BY rowid;"
 create_fixture multipage "SELECT rowid, a, b FROM big ORDER BY rowid;"
+create_fixture overflow "SELECT rowid, a, b FROM large ORDER BY rowid;"
