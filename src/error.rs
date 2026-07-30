@@ -5,6 +5,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug)]
 pub enum Error {
     Io(std::io::Error),
+    InvalidBtreePage(&'static str),
+    InvalidBtreePageType(u8),
     InvalidDatabaseHeader(&'static str),
     InvalidPageSize(u16),
     InvalidTextEncoding(u32),
@@ -32,6 +34,12 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io(err) => write!(f, "I/O error: {err}"),
+            Self::InvalidBtreePage(message) => {
+                write!(f, "invalid b-tree page: {message}")
+            }
+            Self::InvalidBtreePageType(page_type) => {
+                write!(f, "invalid b-tree page type: 0x{page_type:02x}")
+            }
             Self::InvalidDatabaseHeader(message) => {
                 write!(f, "invalid database header: {message}")
             }

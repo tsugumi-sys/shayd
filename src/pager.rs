@@ -54,6 +54,11 @@ impl Pager {
 }
 
 impl Page {
+    #[cfg(test)]
+    pub(crate) fn new(number: u32, bytes: Vec<u8>) -> Self {
+        Self { number, bytes }
+    }
+
     pub fn number(&self) -> u32 {
         self.number
     }
