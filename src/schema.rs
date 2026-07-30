@@ -41,7 +41,8 @@ pub struct ColumnSchema {
 impl Schema {
     pub fn load(pager: &mut Pager) -> Result<Self> {
         let page = pager.read_page(1)?;
-        let btree_page = BtreePage::parse(&page)?;
+        let usable_size = pager.header().usable_space() as usize;
+        let btree_page = BtreePage::parse_with_usable_size(&page, usable_size)?;
         if btree_page.header().page_type != PageType::TableLeaf {
             return Err(Error::Unsupported(
                 "multi-page sqlite_schema is not supported",
@@ -49,7 +50,7 @@ impl Schema {
         }
 
         let objects = btree_page
-            .table_leaf_cells(&page)?
+            .table_leaf_cells_with_usable_size(&page, usable_size)?
             .into_iter()
             .map(|cell| SchemaObject::decode(&cell.record))
             .collect::<Result<Vec<_>>>()?;

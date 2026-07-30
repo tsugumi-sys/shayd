@@ -93,6 +93,14 @@ impl DatabaseHeader {
             return Err(Error::InvalidDatabaseHeader("unsupported read version"));
         }
 
+        let reserved_space = bytes[20];
+        let usable_space = page_size.get() - u32::from(reserved_space);
+        if usable_space < 480 {
+            return Err(Error::InvalidDatabaseHeader(
+                "reserved space leaves less than 480 usable bytes",
+            ));
+        }
+
         let max_embedded_payload_fraction = bytes[21];
         let min_embedded_payload_fraction = bytes[22];
         let leaf_payload_fraction = bytes[23];
@@ -123,7 +131,7 @@ impl DatabaseHeader {
             page_size,
             write_version,
             read_version,
-            reserved_space: bytes[20],
+            reserved_space,
             max_embedded_payload_fraction,
             min_embedded_payload_fraction,
             leaf_payload_fraction,
@@ -201,6 +209,20 @@ mod tests {
         bytes[16..18].copy_from_slice(&1_u16.to_be_bytes());
         let header = DatabaseHeader::parse(&bytes).unwrap();
         assert_eq!(header.page_size.get(), 65_536);
+    }
+
+    #[test]
+    fn rejects_reserved_space_that_makes_usable_size_too_small() {
+        let mut bytes = valid_header();
+        bytes[16..18].copy_from_slice(&512_u16.to_be_bytes());
+        bytes[20] = 33;
+
+        assert!(matches!(
+            DatabaseHeader::parse(&bytes),
+            Err(Error::InvalidDatabaseHeader(
+                "reserved space leaves less than 480 usable bytes"
+            ))
+        ));
     }
 
     #[test]

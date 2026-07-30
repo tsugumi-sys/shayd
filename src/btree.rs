@@ -77,9 +77,17 @@ pub struct TableInteriorCell {
 
 impl BtreePage {
     pub fn parse(page: &Page) -> Result<Self> {
+        Self::parse_with_usable_size(page, page.bytes().len())
+    }
+
+    pub fn parse_with_usable_size(page: &Page, usable_size: usize) -> Result<Self> {
         let bytes = page.bytes();
+        if usable_size > bytes.len() {
+            return Err(Error::InvalidBtreePage("usable size exceeds page size"));
+        }
+
         let offset = page.btree_header_offset();
-        if offset >= bytes.len() {
+        if offset >= usable_size {
             return Err(Error::InvalidBtreePage(
                 "b-tree header offset is out of bounds",
             ));
@@ -88,18 +96,18 @@ impl BtreePage {
         let page_type = PageType::try_from(bytes[offset])?;
         let header_size = page_type.header_size();
         let header_end = offset + header_size;
-        if header_end > bytes.len() {
+        if header_end > usable_size {
             return Err(Error::truncated(
                 "b-tree page header",
                 header_end,
-                bytes.len(),
+                usable_size,
             ));
         }
 
         let first_freeblock_offset = read_u16(bytes, offset + 1)?;
         let cell_count = read_u16(bytes, offset + 3)?;
         let cell_content_area_offset =
-            parse_cell_content_area_offset(read_u16(bytes, offset + 5)?, bytes.len())?;
+            parse_cell_content_area_offset(read_u16(bytes, offset + 5)?, usable_size)?;
         let fragmented_free_bytes = bytes[offset + 7];
         let right_most_pointer =
             if matches!(page_type, PageType::IndexInterior | PageType::TableInterior) {
@@ -113,11 +121,11 @@ impl BtreePage {
         let pointer_array_end = pointer_array_start
             .checked_add(pointer_array_len)
             .ok_or(Error::InvalidBtreePage("cell pointer array is too large"))?;
-        if pointer_array_end > bytes.len() {
+        if pointer_array_end > usable_size {
             return Err(Error::truncated(
                 "cell pointer array",
                 pointer_array_end,
-                bytes.len(),
+                usable_size,
             ));
         }
         if pointer_array_end > cell_content_area_offset {
@@ -131,7 +139,7 @@ impl BtreePage {
             let pointer_offset = pointer_array_start + index * 2;
             let cell_offset = read_u16(bytes, pointer_offset)?;
             let cell_offset_usize = usize::from(cell_offset);
-            if cell_offset_usize < cell_content_area_offset || cell_offset_usize >= bytes.len() {
+            if cell_offset_usize < cell_content_area_offset || cell_offset_usize >= usable_size {
                 return Err(Error::InvalidBtreePage("cell offset is out of bounds"));
             }
             cell_pointers.push(cell_offset);
@@ -166,6 +174,14 @@ impl BtreePage {
     }
 
     pub fn table_leaf_cells<'a>(&self, page: &'a Page) -> Result<Vec<TableLeafCell<'a>>> {
+        self.table_leaf_cells_with_usable_size(page, page.bytes().len())
+    }
+
+    pub fn table_leaf_cells_with_usable_size<'a>(
+        &self,
+        page: &'a Page,
+        usable_size: usize,
+    ) -> Result<Vec<TableLeafCell<'a>>> {
         if self.page_number != page.number() {
             return Err(Error::InvalidBtreePage(
                 "parsed b-tree page does not match source page",
@@ -177,7 +193,7 @@ impl BtreePage {
 
         self.cell_pointers
             .iter()
-            .map(|cell_offset| TableLeafCell::parse(page, usize::from(*cell_offset)))
+            .map(|cell_offset| TableLeafCell::parse(page, usize::from(*cell_offset), usable_size))
             .collect()
     }
 
@@ -221,8 +237,8 @@ impl BtreePage {
 }
 
 impl<'a> TableLeafCell<'a> {
-    fn parse(page: &'a Page, offset: usize) -> Result<Self> {
-        let payload = TableLeafPayload::parse(page, offset, page.bytes().len())?;
+    fn parse(page: &'a Page, offset: usize, usable_size: usize) -> Result<Self> {
+        let payload = TableLeafPayload::parse(page, offset, usable_size)?;
         if payload.first_overflow_page.is_some() {
             return Err(Error::Unsupported(
                 "overflow table leaf payloads require a pager",

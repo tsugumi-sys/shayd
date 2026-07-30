@@ -246,7 +246,7 @@ fn rejects_table_btree_cycles() {
 fn rejects_table_child_page_beyond_database_size() {
     let db_path = copy_fixture_to_temp("multipage.db", "bad-child-page");
     let pager = Pager::open(&db_path).unwrap();
-    let bad_page_number = pager.header().database_size_pages + 1;
+    let bad_page_number = pager.database_size_pages() + 1;
     drop(pager);
     overwrite_first_root_child_page(&db_path, bad_page_number).unwrap();
 

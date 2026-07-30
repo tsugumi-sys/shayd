@@ -97,11 +97,11 @@ fn scan_table_into(
     }
 
     let page = pager.read_page(page_number)?;
-    let btree_page = BtreePage::parse(&page)?;
+    let usable_size = pager.header().usable_space() as usize;
+    let btree_page = BtreePage::parse_with_usable_size(&page, usable_size)?;
 
     match btree_page.header().page_type {
         PageType::TableLeaf => {
-            let usable_size = pager.header().usable_space() as usize;
             for cell in btree_page.table_leaf_payloads(&page, usable_size)? {
                 let payload = read_table_leaf_payload(pager, &cell, usable_size)?;
                 let record = Record::decode(&payload)?;
@@ -137,8 +137,7 @@ fn validate_table_page_number(pager: &Pager, page_number: u32) -> Result<()> {
         return Err(Error::InvalidBtreePage("table page cannot be zero"));
     }
 
-    let database_size_pages = pager.header().database_size_pages;
-    if database_size_pages != 0 && page_number > database_size_pages {
+    if page_number > pager.database_size_pages() {
         return Err(Error::InvalidBtreePage("table page exceeds database size"));
     }
 
@@ -188,8 +187,7 @@ fn validate_overflow_page_number(pager: &Pager, page_number: u32) -> Result<()> 
         return Err(Error::InvalidBtreePage("overflow page cannot be zero"));
     }
 
-    let database_size_pages = pager.header().database_size_pages;
-    if database_size_pages != 0 && page_number > database_size_pages {
+    if page_number > pager.database_size_pages() {
         return Err(Error::InvalidBtreePage(
             "overflow page exceeds database size",
         ));
