@@ -228,6 +228,39 @@ fn scans_rows_from_multipage_fixture_table() {
 }
 
 #[test]
+fn rejects_table_btree_cycles() {
+    let db_path = copy_fixture_to_temp("multipage.db", "cycle");
+    overwrite_first_root_child_page(&db_path, 2).unwrap();
+
+    let mut database = Database::open(&db_path).unwrap();
+
+    assert!(matches!(
+        database.scan_table("big"),
+        Err(Error::InvalidBtreePage("table b-tree cycle detected"))
+    ));
+
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn rejects_table_child_page_beyond_database_size() {
+    let db_path = copy_fixture_to_temp("multipage.db", "bad-child-page");
+    let pager = Pager::open(&db_path).unwrap();
+    let bad_page_number = pager.header().database_size_pages + 1;
+    drop(pager);
+    overwrite_first_root_child_page(&db_path, bad_page_number).unwrap();
+
+    let mut database = Database::open(&db_path).unwrap();
+
+    assert!(matches!(
+        database.scan_table("big"),
+        Err(Error::InvalidBtreePage("table page exceeds database size"))
+    ));
+
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
 fn database_api_scans_named_rows_from_multipage_fixture_table() {
     let db_path = common::fixture_path("multipage.db");
     let mut database = Database::open(&db_path).unwrap();
@@ -273,10 +306,7 @@ fn scans_rows_from_overflow_fixture_table() {
 
 #[test]
 fn rejects_overflow_chain_that_ends_early() {
-    let source_path = common::fixture_path("overflow.db");
-    let db_path =
-        std::env::temp_dir().join(format!("oxlite-overflow-corrupt-{}.db", std::process::id()));
-    fs::copy(&source_path, &db_path).unwrap();
+    let db_path = copy_fixture_to_temp("overflow.db", "overflow-corrupt");
 
     let mut pager = Pager::open(&db_path).unwrap();
     let root_page_number = Schema::load(&mut pager)
@@ -311,6 +341,29 @@ fn rejects_overflow_chain_that_ends_early() {
     ));
 
     fs::remove_file(db_path).unwrap();
+}
+
+fn copy_fixture_to_temp(fixture_name: &str, label: &str) -> std::path::PathBuf {
+    let source_path = common::fixture_path(fixture_name);
+    let db_path = std::env::temp_dir().join(format!("oxlite-{label}-{}.db", std::process::id()));
+    fs::copy(source_path, &db_path).unwrap();
+    db_path
+}
+
+fn overwrite_first_root_child_page(
+    path: &std::path::Path,
+    child_page_number: u32,
+) -> std::io::Result<()> {
+    let mut pager = Pager::open(path).unwrap();
+    let page_size = pager.header().page_size.get() as u64;
+    let root_page = pager.read_page(2).unwrap();
+    let root_btree_page = BtreePage::parse(&root_page).unwrap();
+    let first_cell_offset = u64::from(root_btree_page.cell_pointers()[0]);
+    drop(pager);
+
+    let mut file = OpenOptions::new().write(true).open(path)?;
+    file.seek(SeekFrom::Start(page_size + first_cell_offset))?;
+    file.write_all(&child_page_number.to_be_bytes())
 }
 
 fn rows_to_sqlite_output(rows: &[oxlite::Row]) -> String {

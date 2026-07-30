@@ -1,8 +1,12 @@
+use std::collections::HashSet;
+
 use crate::btree::{BtreePage, PageType, TableLeafPayload};
 use crate::error::{Error, Result};
 use crate::pager::Pager;
 use crate::record::{Record, Value};
 use crate::schema::TableSchema;
+
+const MAX_TABLE_BTREE_DEPTH: usize = 20;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Row {
@@ -57,9 +61,9 @@ impl NamedRow {
 }
 
 pub fn scan_table(pager: &mut Pager, root_page: u32) -> Result<Vec<Row>> {
-    let mut rows = Vec::new();
-    scan_table_into(pager, root_page, &mut rows)?;
-    Ok(rows)
+    let mut state = ScanState::default();
+    scan_table_into(pager, root_page, 0, &mut state)?;
+    Ok(state.rows)
 }
 
 pub fn name_rows(rows: Vec<Row>, table_schema: &TableSchema) -> Result<Vec<NamedRow>> {
@@ -72,7 +76,26 @@ pub fn scan_table_page(pager: &mut Pager, root_page: u32) -> Result<Vec<Row>> {
     scan_table(pager, root_page)
 }
 
-fn scan_table_into(pager: &mut Pager, page_number: u32, rows: &mut Vec<Row>) -> Result<()> {
+#[derive(Debug, Default)]
+struct ScanState {
+    rows: Vec<Row>,
+    visited_pages: HashSet<u32>,
+}
+
+fn scan_table_into(
+    pager: &mut Pager,
+    page_number: u32,
+    depth: usize,
+    state: &mut ScanState,
+) -> Result<()> {
+    if depth >= MAX_TABLE_BTREE_DEPTH {
+        return Err(Error::InvalidBtreePage("table b-tree depth limit exceeded"));
+    }
+    validate_table_page_number(pager, page_number)?;
+    if !state.visited_pages.insert(page_number) {
+        return Err(Error::InvalidBtreePage("table b-tree cycle detected"));
+    }
+
     let page = pager.read_page(page_number)?;
     let btree_page = BtreePage::parse(&page)?;
 
@@ -82,7 +105,7 @@ fn scan_table_into(pager: &mut Pager, page_number: u32, rows: &mut Vec<Row>) -> 
             for cell in btree_page.table_leaf_payloads(&page, usable_size)? {
                 let payload = read_table_leaf_payload(pager, &cell, usable_size)?;
                 let record = Record::decode(&payload)?;
-                rows.push(Row {
+                state.rows.push(Row {
                     rowid: cell.rowid,
                     values: record.values().to_vec(),
                 });
@@ -90,7 +113,7 @@ fn scan_table_into(pager: &mut Pager, page_number: u32, rows: &mut Vec<Row>) -> 
         }
         PageType::TableInterior => {
             for cell in btree_page.table_interior_cells(&page)? {
-                scan_table_into(pager, cell.left_child_page, rows)?;
+                scan_table_into(pager, cell.left_child_page, depth + 1, state)?;
             }
             let right_most_page =
                 btree_page
@@ -99,11 +122,24 @@ fn scan_table_into(pager: &mut Pager, page_number: u32, rows: &mut Vec<Row>) -> 
                     .ok_or(Error::InvalidBtreePage(
                         "table interior page missing right-most pointer",
                     ))?;
-            scan_table_into(pager, right_most_page, rows)?;
+            scan_table_into(pager, right_most_page, depth + 1, state)?;
         }
         PageType::IndexInterior | PageType::IndexLeaf => {
             return Err(Error::InvalidBtreePage("expected table b-tree page"));
         }
+    }
+
+    Ok(())
+}
+
+fn validate_table_page_number(pager: &Pager, page_number: u32) -> Result<()> {
+    if page_number == 0 {
+        return Err(Error::InvalidBtreePage("table page cannot be zero"));
+    }
+
+    let database_size_pages = pager.header().database_size_pages;
+    if database_size_pages != 0 && page_number > database_size_pages {
+        return Err(Error::InvalidBtreePage("table page exceeds database size"));
     }
 
     Ok(())
