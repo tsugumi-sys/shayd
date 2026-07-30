@@ -2,7 +2,7 @@ mod common;
 
 use std::fs;
 
-use oxlite::{BtreePage, PageType, Pager, Value};
+use oxlite::{BtreePage, PageType, Pager, Schema, SchemaObjectType, Value};
 
 #[test]
 fn simple_fixture_is_available() {
@@ -40,5 +40,22 @@ fn reads_table_leaf_cells_from_simple_fixture() {
     assert_eq!(
         cells[1].record.values(),
         &[Value::Integer(20), Value::Text("beta".to_owned())]
+    );
+}
+
+#[test]
+fn loads_schema_from_simple_fixture() {
+    let db_path = common::fixture_path("simple.db");
+    let mut pager = Pager::open(&db_path).unwrap();
+    let schema = Schema::load(&mut pager).unwrap();
+    let table = schema.table("t").unwrap();
+
+    assert_eq!(table.object_type, SchemaObjectType::Table);
+    assert_eq!(table.name, "t");
+    assert_eq!(table.table_name, "t");
+    assert_eq!(table.root_page, Some(2));
+    assert_eq!(
+        table.sql.as_deref(),
+        Some("CREATE TABLE t (\n  a INTEGER,\n  b TEXT\n)")
     );
 }
