@@ -55,10 +55,10 @@ pub const fn encoded_len(value: u64) -> usize {
         0x80..=0x3fff => 2,
         0x4000..=0x1f_ffff => 3,
         0x20_0000..=0x0fff_ffff => 4,
-        0x1000_0000..=0x07ff_ffff_ff => 5,
-        0x0800_0000_00..=0x03ff_ffff_ffff => 6,
-        0x0400_0000_0000..=0x01ff_ffff_ffff_ff => 7,
-        0x0200_0000_0000_00..=0x00ff_ffff_ffff_ffff => 8,
+        0x1000_0000..=0x0007_ffff_ffff => 5,
+        0x0008_0000_0000..=0x03ff_ffff_ffff => 6,
+        0x0400_0000_0000..=0x0001_ffff_ffff_ffff => 7,
+        0x0002_0000_0000_0000..=0x00ff_ffff_ffff_ffff => 8,
         _ => 9,
     }
 }
