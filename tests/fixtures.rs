@@ -112,6 +112,22 @@ fn database_api_scans_simple_fixture_table() {
 }
 
 #[test]
+fn database_api_scans_named_rows_from_simple_fixture_table() {
+    let db_path = common::fixture_path("simple.db");
+    let mut database = Database::open(&db_path).unwrap();
+    let rows = database.scan_table_named("t").unwrap();
+
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].rowid(), 1);
+    assert_eq!(rows[0].get("a"), Some(&Value::Integer(10)));
+    assert_eq!(rows[0].get("b"), Some(&Value::Text("alpha".to_owned())));
+    assert_eq!(rows[0].get("missing"), None);
+    assert_eq!(rows[1].rowid(), 2);
+    assert_eq!(rows[1].get("a"), Some(&Value::Integer(20)));
+    assert_eq!(rows[1].get("b"), Some(&Value::Text("beta".to_owned())));
+}
+
+#[test]
 fn scans_rows_from_multipage_fixture_table() {
     let db_path = common::fixture_path("multipage.db");
     let expected_path = common::fixture_path("multipage.expected");
@@ -147,6 +163,31 @@ fn scans_rows_from_multipage_fixture_table() {
     assert_eq!(
         rows_to_sqlite_output(&rows),
         fs::read_to_string(expected_path).unwrap()
+    );
+}
+
+#[test]
+fn database_api_scans_named_rows_from_multipage_fixture_table() {
+    let db_path = common::fixture_path("multipage.db");
+    let mut database = Database::open(&db_path).unwrap();
+    let rows = database.scan_table_named("big").unwrap();
+
+    assert_eq!(rows.len(), 120);
+    assert_eq!(rows[0].rowid(), 1);
+    assert_eq!(rows[0].get("a"), Some(&Value::Integer(1)));
+    assert_eq!(
+        rows[0].get("b"),
+        Some(&Value::Text(
+            "row-001-abcdefghijklmnopqrstuvwxyz".to_owned()
+        ))
+    );
+    assert_eq!(rows[119].rowid(), 120);
+    assert_eq!(rows[119].get("a"), Some(&Value::Integer(120)));
+    assert_eq!(
+        rows[119].get("b"),
+        Some(&Value::Text(
+            "row-120-abcdefghijklmnopqrstuvwxyz".to_owned()
+        ))
     );
 }
 

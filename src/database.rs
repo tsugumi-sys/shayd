@@ -3,7 +3,7 @@ use std::path::Path;
 use crate::error::{Error, Result};
 use crate::pager::Pager;
 use crate::schema::Schema;
-use crate::table::{Row, scan_table};
+use crate::table::{NamedRow, Row, name_rows, scan_table};
 
 #[derive(Debug)]
 pub struct Database {
@@ -32,5 +32,16 @@ impl Database {
             .ok_or(Error::InvalidSchema("table has no root page"))?;
 
         scan_table(&mut self.pager, root_page)
+    }
+
+    pub fn scan_table_named(&mut self, name: &str) -> Result<Vec<NamedRow>> {
+        let table_schema = self
+            .schema
+            .table_schema(name)
+            .ok_or(Error::InvalidSchema("table schema not found"))?
+            .clone();
+        let rows = self.scan_table(name)?;
+
+        name_rows(rows, &table_schema)
     }
 }

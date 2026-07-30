@@ -9,6 +9,7 @@ pub enum Error {
     InvalidBtreePageType(u8),
     InvalidDatabaseHeader(&'static str),
     InvalidPageSize(u16),
+    InvalidRow(&'static str),
     InvalidSchema(&'static str),
     InvalidTextEncoding(u32),
     InvalidVarint,
@@ -46,6 +47,7 @@ impl fmt::Display for Error {
                 write!(f, "invalid database header: {message}")
             }
             Self::InvalidPageSize(size) => write!(f, "invalid database page size: {size}"),
+            Self::InvalidRow(message) => write!(f, "invalid row: {message}"),
             Self::InvalidSchema(message) => write!(f, "invalid schema: {message}"),
             Self::InvalidTextEncoding(encoding) => {
                 write!(f, "unsupported database text encoding: {encoding}")

@@ -2,6 +2,7 @@ use crate::btree::{BtreePage, PageType};
 use crate::error::{Error, Result};
 use crate::pager::Pager;
 use crate::record::Value;
+use crate::schema::TableSchema;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Row {
@@ -9,10 +10,62 @@ pub struct Row {
     pub values: Vec<Value>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct NamedRow {
+    rowid: i64,
+    columns: Vec<String>,
+    values: Vec<Value>,
+}
+
+impl NamedRow {
+    pub fn from_row(row: Row, table_schema: &TableSchema) -> Result<Self> {
+        if row.values.len() != table_schema.columns.len() {
+            return Err(Error::InvalidRow(
+                "row value count does not match table column count",
+            ));
+        }
+
+        Ok(Self {
+            rowid: row.rowid,
+            columns: table_schema
+                .columns
+                .iter()
+                .map(|column| column.name.clone())
+                .collect(),
+            values: row.values,
+        })
+    }
+
+    pub fn rowid(&self) -> i64 {
+        self.rowid
+    }
+
+    pub fn get(&self, column_name: &str) -> Option<&Value> {
+        self.columns
+            .iter()
+            .position(|column| column == column_name)
+            .and_then(|index| self.values.get(index))
+    }
+
+    pub fn columns(&self) -> &[String] {
+        &self.columns
+    }
+
+    pub fn values(&self) -> &[Value] {
+        &self.values
+    }
+}
+
 pub fn scan_table(pager: &mut Pager, root_page: u32) -> Result<Vec<Row>> {
     let mut rows = Vec::new();
     scan_table_into(pager, root_page, &mut rows)?;
     Ok(rows)
+}
+
+pub fn name_rows(rows: Vec<Row>, table_schema: &TableSchema) -> Result<Vec<NamedRow>> {
+    rows.into_iter()
+        .map(|row| NamedRow::from_row(row, table_schema))
+        .collect()
 }
 
 pub fn scan_table_page(pager: &mut Pager, root_page: u32) -> Result<Vec<Row>> {
