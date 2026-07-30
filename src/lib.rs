@@ -4,6 +4,7 @@ pub mod header;
 pub mod pager;
 pub mod record;
 pub mod schema;
+pub mod table;
 pub mod varint;
 
 pub use btree::{BtreePage, BtreePageHeader, PageType, TableLeafCell};
@@ -12,3 +13,4 @@ pub use header::{DatabaseHeader, PageSize, TextEncoding};
 pub use pager::{Page, Pager};
 pub use record::{Record, Value};
 pub use schema::{Schema, SchemaObject, SchemaObjectType};
+pub use table::{Row, scan_table_page};
