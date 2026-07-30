@@ -128,6 +128,64 @@ fn database_api_scans_named_rows_from_simple_fixture_table() {
 }
 
 #[test]
+fn query_api_projects_simple_fixture_rows() {
+    let db_path = common::fixture_path("simple.db");
+    let mut database = Database::open(&db_path).unwrap();
+    let query = database.query_table("t").select(["rowid", "a", "b"]);
+    let rows = database.execute_table_query(query).unwrap();
+
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].get("rowid"), Some(&Value::Integer(1)));
+    assert_eq!(rows[0].get("a"), Some(&Value::Integer(10)));
+    assert_eq!(rows[0].get("b"), Some(&Value::Text("alpha".to_owned())));
+    assert_eq!(rows[1].get("rowid"), Some(&Value::Integer(2)));
+    assert_eq!(rows[1].get("a"), Some(&Value::Integer(20)));
+    assert_eq!(rows[1].get("b"), Some(&Value::Text("beta".to_owned())));
+}
+
+#[test]
+fn query_api_projects_selected_column() {
+    let db_path = common::fixture_path("simple.db");
+    let mut database = Database::open(&db_path).unwrap();
+    let query = database.query_table("t").select(["b"]);
+    let rows = database.execute_table_query(query).unwrap();
+
+    assert_eq!(
+        rows[0].values(),
+        &[("b".to_owned(), Value::Text("alpha".to_owned()))]
+    );
+    assert_eq!(
+        rows[1].values(),
+        &[("b".to_owned(), Value::Text("beta".to_owned()))]
+    );
+}
+
+#[test]
+fn query_api_filters_by_rowid() {
+    let db_path = common::fixture_path("simple.db");
+    let mut database = Database::open(&db_path).unwrap();
+    let query = database
+        .query_table("t")
+        .select(["rowid", "a", "b"])
+        .rowid_eq(2);
+    let rows = database.execute_table_query(query).unwrap();
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("rowid"), Some(&Value::Integer(2)));
+    assert_eq!(rows[0].get("a"), Some(&Value::Integer(20)));
+    assert_eq!(rows[0].get("b"), Some(&Value::Text("beta".to_owned())));
+}
+
+#[test]
+fn query_api_rejects_unknown_columns() {
+    let db_path = common::fixture_path("simple.db");
+    let mut database = Database::open(&db_path).unwrap();
+    let query = database.query_table("t").select(["missing"]);
+
+    assert!(database.execute_table_query(query).is_err());
+}
+
+#[test]
 fn scans_rows_from_multipage_fixture_table() {
     let db_path = common::fixture_path("multipage.db");
     let expected_path = common::fixture_path("multipage.expected");
