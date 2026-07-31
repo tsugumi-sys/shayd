@@ -53,6 +53,22 @@ fn execute_sql_reads_memory_backed_database() {
 }
 
 #[test]
+fn read_transaction_executes_simple_select() {
+    let db_path = common::fixture_path("simple.db");
+    let expected_path = common::fixture_path("simple.expected");
+    let mut database = Database::open(&db_path).unwrap();
+    let mut transaction = database.read_transaction().unwrap();
+    let rows = transaction
+        .execute_sql("SELECT rowid, a, b FROM t")
+        .unwrap();
+
+    assert_eq!(
+        query_rows_to_sqlite_output(&rows),
+        fs::read_to_string(expected_path).unwrap()
+    );
+}
+
+#[test]
 fn rejects_truncated_memory_backed_database() {
     let db_path = common::fixture_path("simple.db");
     let mut bytes = fs::read(db_path).unwrap();

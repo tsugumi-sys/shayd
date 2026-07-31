@@ -13,6 +13,12 @@ pub struct Database {
     schema: Schema,
 }
 
+#[derive(Debug)]
+pub struct ReadTransaction<'a> {
+    pager: &'a mut Pager,
+    schema: &'a Schema,
+}
+
 impl Database {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let pager = Pager::open(path)?;
@@ -33,6 +39,39 @@ impl Database {
         &self.schema
     }
 
+    pub fn read_transaction(&mut self) -> Result<ReadTransaction<'_>> {
+        Ok(ReadTransaction {
+            pager: &mut self.pager,
+            schema: &self.schema,
+        })
+    }
+
+    pub fn scan_table(&mut self, name: &str) -> Result<Vec<Row>> {
+        self.read_transaction()?.scan_table(name)
+    }
+
+    pub fn scan_table_named(&mut self, name: &str) -> Result<Vec<NamedRow>> {
+        self.read_transaction()?.scan_table_named(name)
+    }
+
+    pub fn query_table(&self, name: &str) -> TableQuery {
+        TableQuery::new(name)
+    }
+
+    pub fn execute_table_query(&mut self, query: TableQuery) -> Result<Vec<QueryResultRow>> {
+        self.read_transaction()?.execute_table_query(query)
+    }
+
+    pub fn execute_sql(&mut self, sql: &str) -> Result<Vec<QueryResultRow>> {
+        self.read_transaction()?.execute_sql(sql)
+    }
+}
+
+impl ReadTransaction<'_> {
+    pub fn schema(&self) -> &Schema {
+        self.schema
+    }
+
     pub fn scan_table(&mut self, name: &str) -> Result<Vec<Row>> {
         let table = self
             .schema
@@ -42,7 +81,7 @@ impl Database {
             .root_page
             .ok_or(Error::InvalidSchema("table has no root page"))?;
 
-        scan_table(&mut self.pager, root_page)
+        scan_table(self.pager, root_page)
     }
 
     pub fn scan_table_named(&mut self, name: &str) -> Result<Vec<NamedRow>> {
