@@ -16,6 +16,7 @@ pub struct SchemaObject {
     pub root_page: Option<u32>,
     pub sql: Option<String>,
     pub table_schema: Option<TableSchema>,
+    pub index_schema: Option<IndexSchema>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +37,14 @@ pub struct TableSchema {
 pub struct ColumnSchema {
     pub name: String,
     pub declared_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexSchema {
+    pub name: String,
+    pub table_name: String,
+    pub columns: Vec<String>,
+    pub unique: bool,
 }
 
 impl Schema {
@@ -72,6 +81,24 @@ impl Schema {
         self.table(name)
             .and_then(|object| object.table_schema.as_ref())
     }
+
+    pub fn indexes_for_table(&self, table_name: &str) -> Vec<&IndexSchema> {
+        self.objects
+            .iter()
+            .filter_map(|object| object.index_schema.as_ref())
+            .filter(|index| index.table_name == table_name)
+            .collect()
+    }
+
+    pub fn index_for_table_column(
+        &self,
+        table_name: &str,
+        column_name: &str,
+    ) -> Option<&IndexSchema> {
+        self.indexes_for_table(table_name)
+            .into_iter()
+            .find(|index| index.columns.iter().any(|column| column == column_name))
+    }
 }
 
 impl SchemaObject {
@@ -103,6 +130,10 @@ impl SchemaObject {
             (SchemaObjectType::Table, Some(sql)) => Some(TableSchema::parse(sql)?),
             _ => None,
         };
+        let index_schema = match (object_type, sql.as_deref()) {
+            (SchemaObjectType::Index, Some(sql)) => Some(IndexSchema::parse(sql)?),
+            _ => None,
+        };
 
         Ok(Self {
             object_type,
@@ -111,6 +142,7 @@ impl SchemaObject {
             root_page,
             sql,
             table_schema,
+            index_schema,
         })
     }
 }
@@ -168,6 +200,55 @@ impl TableSchema {
     }
 }
 
+impl IndexSchema {
+    pub fn parse(sql: &str) -> Result<Self> {
+        let sql = sql.trim();
+        let rest = strip_ascii_prefix(sql, "CREATE").ok_or(Error::Unsupported(
+            "only simple CREATE INDEX schema SQL is supported",
+        ))?;
+        let (unique, rest) = match strip_ascii_prefix(rest, "UNIQUE") {
+            Some(rest) => (true, rest),
+            None => (false, rest),
+        };
+        let rest = strip_ascii_prefix(rest, "INDEX").ok_or(Error::Unsupported(
+            "only simple CREATE INDEX schema SQL is supported",
+        ))?;
+        let on_offset = find_ascii_keyword(rest, "ON")
+            .ok_or(Error::InvalidSchema("CREATE INDEX missing ON clause"))?;
+        let name = parse_simple_identifier(rest[..on_offset].trim())?.to_owned();
+        let rest = rest[on_offset + "ON".len()..].trim_start();
+
+        let open_paren = rest
+            .find('(')
+            .ok_or(Error::InvalidSchema("CREATE INDEX missing column list"))?;
+        let close_paren = rest.rfind(')').ok_or(Error::InvalidSchema(
+            "CREATE INDEX missing closing parenthesis",
+        ))?;
+        if close_paren <= open_paren {
+            return Err(Error::InvalidSchema("empty CREATE INDEX column list"));
+        }
+        if !rest[close_paren + 1..].trim().is_empty() {
+            return Err(Error::Unsupported(
+                "partial indexes and trailing index clauses are not supported",
+            ));
+        }
+
+        let table_name = parse_simple_identifier(rest[..open_paren].trim())?.to_owned();
+        let columns = split_top_level_commas(&rest[open_paren + 1..close_paren])?;
+        if columns.len() != 1 {
+            return Err(Error::Unsupported("multi-column indexes are not supported"));
+        }
+        let column_name = parse_simple_identifier(columns[0].trim())?.to_owned();
+
+        Ok(Self {
+            name,
+            table_name,
+            columns: vec![column_name],
+            unique,
+        })
+    }
+}
+
 fn text_value<'a>(value: &'a Value, column: &'static str) -> Result<&'a str> {
     match value {
         Value::Text(text) => Ok(text),
@@ -198,6 +279,35 @@ fn parse_identifier(input: &str) -> Result<&str> {
         return Err(Error::Unsupported("quoted identifiers are not supported"));
     }
     Ok(identifier)
+}
+
+fn parse_simple_identifier(input: &str) -> Result<&str> {
+    let identifier = parse_identifier(input)?;
+    if identifier.len() != input.trim().len()
+        || identifier.is_empty()
+        || identifier.as_bytes()[0].is_ascii_digit()
+        || !identifier
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        return Err(Error::Unsupported(
+            "only simple unquoted identifiers are supported",
+        ));
+    }
+    Ok(identifier)
+}
+
+fn find_ascii_keyword(input: &str, keyword: &str) -> Option<usize> {
+    input
+        .split_ascii_whitespace()
+        .scan(0, |offset, part| {
+            let start = input[*offset..]
+                .find(part)
+                .map(|relative| *offset + relative)?;
+            *offset = start + part.len();
+            Some((start, part))
+        })
+        .find_map(|(start, part)| part.eq_ignore_ascii_case(keyword).then_some(start))
 }
 
 fn split_top_level_commas(input: &str) -> Result<Vec<&str>> {
@@ -292,6 +402,35 @@ mod tests {
                 ],
             })
         );
+        assert_eq!(object.index_schema, None);
+    }
+
+    #[test]
+    fn decodes_index_schema_object_record() {
+        let record = Record::new(vec![
+            Value::Text("index".to_owned()),
+            Value::Text("idx_t_a".to_owned()),
+            Value::Text("t".to_owned()),
+            Value::Integer(3),
+            Value::Text("CREATE INDEX idx_t_a ON t(a)".to_owned()),
+        ]);
+
+        let object = SchemaObject::decode(&record).unwrap();
+
+        assert_eq!(object.object_type, SchemaObjectType::Index);
+        assert_eq!(object.name, "idx_t_a");
+        assert_eq!(object.table_name, "t");
+        assert_eq!(object.root_page, Some(3));
+        assert_eq!(object.table_schema, None);
+        assert_eq!(
+            object.index_schema,
+            Some(IndexSchema {
+                name: "idx_t_a".to_owned(),
+                table_name: "t".to_owned(),
+                columns: vec!["a".to_owned()],
+                unique: false,
+            })
+        );
     }
 
     #[test]
@@ -319,6 +458,52 @@ mod tests {
         assert!(matches!(
             TableSchema::parse("CREATE TABLE t (a INTEGER, PRIMARY KEY (a))"),
             Err(Error::Unsupported("table constraints are not supported"))
+        ));
+    }
+
+    #[test]
+    fn parses_create_index_metadata() {
+        assert_eq!(
+            IndexSchema::parse("CREATE INDEX idx_t_a ON t(a)").unwrap(),
+            IndexSchema {
+                name: "idx_t_a".to_owned(),
+                table_name: "t".to_owned(),
+                columns: vec!["a".to_owned()],
+                unique: false,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_create_unique_index_metadata() {
+        assert_eq!(
+            IndexSchema::parse("CREATE UNIQUE INDEX idx_t_a ON t(a)").unwrap(),
+            IndexSchema {
+                name: "idx_t_a".to_owned(),
+                table_name: "t".to_owned(),
+                columns: vec!["a".to_owned()],
+                unique: true,
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_unsupported_index_forms() {
+        assert!(matches!(
+            IndexSchema::parse("CREATE INDEX idx_t_ab ON t(a, b)"),
+            Err(Error::Unsupported("multi-column indexes are not supported"))
+        ));
+        assert!(matches!(
+            IndexSchema::parse("CREATE INDEX idx_t_lower ON t(lower(a))"),
+            Err(Error::Unsupported(
+                "only simple unquoted identifiers are supported"
+            ))
+        ));
+        assert!(matches!(
+            IndexSchema::parse("CREATE INDEX idx_t_a ON t(a) WHERE a > 1"),
+            Err(Error::Unsupported(
+                "partial indexes and trailing index clauses are not supported"
+            ))
         ));
     }
 }

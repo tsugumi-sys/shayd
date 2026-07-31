@@ -4,8 +4,8 @@ use std::fs::{self, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 
 use oxlite::{
-    BtreePage, Database, DatabaseHeader, Error, PageType, Pager, QueryResultRow, Schema,
-    SchemaObjectType, Value, scan_table,
+    BtreePage, Database, DatabaseHeader, Error, IndexSchema, PageType, Pager, QueryResultRow,
+    Schema, SchemaObjectType, Value, scan_table,
 };
 
 #[test]
@@ -130,6 +130,35 @@ fn loads_schema_from_simple_fixture() {
             .collect::<Vec<_>>(),
         vec!["a", "b"]
     );
+}
+
+#[test]
+fn loads_index_metadata_from_indexed_fixture() {
+    let db_path = common::fixture_path("indexed.db");
+    let mut pager = Pager::open(&db_path).unwrap();
+    let schema = Schema::load(&mut pager).unwrap();
+    let indexes = schema.indexes_for_table("items");
+
+    assert_eq!(indexes.len(), 2);
+    assert_eq!(
+        schema.index_for_table_column("items", "a"),
+        Some(&IndexSchema {
+            name: "idx_items_a".to_owned(),
+            table_name: "items".to_owned(),
+            columns: vec!["a".to_owned()],
+            unique: false,
+        })
+    );
+    assert_eq!(
+        schema.index_for_table_column("items", "b"),
+        Some(&IndexSchema {
+            name: "idx_items_b".to_owned(),
+            table_name: "items".to_owned(),
+            columns: vec!["b".to_owned()],
+            unique: true,
+        })
+    );
+    assert!(schema.index_for_table_column("items", "missing").is_none());
 }
 
 #[test]
