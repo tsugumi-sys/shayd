@@ -6,6 +6,7 @@ mod pager;
 mod query;
 mod record;
 mod schema;
+mod sql;
 mod table;
 mod varint;
 
