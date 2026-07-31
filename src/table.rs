@@ -66,6 +66,11 @@ pub fn scan_table(pager: &mut Pager, root_page: u32) -> Result<Vec<Row>> {
     Ok(state.rows)
 }
 
+pub fn lookup_rowid(pager: &mut Pager, root_page: u32, rowid: i64) -> Result<Option<Row>> {
+    let mut visited_pages = HashSet::new();
+    lookup_rowid_in_page(pager, root_page, rowid, 0, &mut visited_pages)
+}
+
 pub fn name_rows(rows: Vec<Row>, table_schema: &TableSchema) -> Result<Vec<NamedRow>> {
     rows.into_iter()
         .map(|row| NamedRow::from_row(row, table_schema))
@@ -129,6 +134,57 @@ fn scan_table_into(
     }
 
     Ok(())
+}
+
+fn lookup_rowid_in_page(
+    pager: &mut Pager,
+    page_number: u32,
+    rowid: i64,
+    depth: usize,
+    visited_pages: &mut HashSet<u32>,
+) -> Result<Option<Row>> {
+    if depth >= MAX_TABLE_BTREE_DEPTH {
+        return Err(Error::InvalidBtreePage("table b-tree depth limit exceeded"));
+    }
+    if !visited_pages.insert(page_number) {
+        return Err(Error::InvalidBtreePage("table b-tree cycle detected"));
+    }
+
+    let page = pager.read_page(page_number)?;
+    let usable_size = pager.header().usable_space() as usize;
+    let btree_page = BtreePage::parse_with_usable_size(&page, usable_size)?;
+
+    match btree_page.header().page_type {
+        PageType::TableLeaf => {
+            for cell in btree_page.table_leaf_payloads(&page, usable_size)? {
+                if cell.rowid == rowid {
+                    let payload = read_table_leaf_payload(pager, &cell, usable_size)?;
+                    let record = Record::decode(&payload)?;
+                    return Ok(Some(Row {
+                        rowid: cell.rowid,
+                        values: record.values().to_vec(),
+                    }));
+                }
+            }
+            Ok(None)
+        }
+        PageType::TableInterior => {
+            let cells = btree_page.table_interior_cells(&page)?;
+            let child_page = cells
+                .iter()
+                .find(|cell| rowid <= cell.rowid)
+                .map(|cell| cell.left_child_page)
+                .or_else(|| btree_page.header().right_most_pointer)
+                .ok_or(Error::InvalidBtreePage(
+                    "table interior page missing right-most pointer",
+                ))?;
+
+            lookup_rowid_in_page(pager, child_page, rowid, depth + 1, visited_pages)
+        }
+        PageType::IndexInterior | PageType::IndexLeaf => {
+            Err(Error::InvalidBtreePage("expected table b-tree page"))
+        }
+    }
 }
 
 fn read_table_leaf_payload(

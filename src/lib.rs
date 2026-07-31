@@ -20,4 +20,4 @@ pub use pager::{Page, Pager};
 pub use query::{QueryResultRow, TableQuery};
 pub use record::{Record, Value};
 pub use schema::{ColumnSchema, IndexSchema, Schema, SchemaObject, SchemaObjectType, TableSchema};
-pub use table::{NamedRow, Row, name_rows, scan_table, scan_table_page};
+pub use table::{NamedRow, Row, lookup_rowid, name_rows, scan_table, scan_table_page};

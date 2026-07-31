@@ -5,7 +5,7 @@ use std::io::{Seek, SeekFrom, Write};
 
 use oxlite::{
     BtreePage, Database, DatabaseHeader, Error, IndexSchema, PageType, Pager, QueryResultRow,
-    Schema, SchemaObjectType, Value, scan_table,
+    Schema, SchemaObjectType, Value, lookup_rowid, scan_table,
 };
 
 #[test]
@@ -335,6 +335,27 @@ fn query_api_filters_by_rowid() {
 }
 
 #[test]
+fn lookup_rowid_reads_expected_simple_fixture_row() {
+    let db_path = common::fixture_path("simple.db");
+    let mut pager = Pager::open(&db_path).unwrap();
+    let row = lookup_rowid(&mut pager, 2, 2).unwrap().unwrap();
+
+    assert_eq!(row.rowid, 2);
+    assert_eq!(
+        row.values,
+        vec![Value::Integer(20), Value::Text("beta".to_owned())]
+    );
+}
+
+#[test]
+fn lookup_rowid_returns_none_for_missing_row() {
+    let db_path = common::fixture_path("simple.db");
+    let mut pager = Pager::open(&db_path).unwrap();
+
+    assert_eq!(lookup_rowid(&mut pager, 2, 999).unwrap(), None);
+}
+
+#[test]
 fn query_api_rejects_unknown_columns() {
     let db_path = common::fixture_path("simple.db");
     let mut database = Database::open(&db_path).unwrap();
@@ -489,6 +510,33 @@ fn scans_rows_from_multipage_fixture_table() {
         rows_to_sqlite_output(&rows),
         fs::read_to_string(expected_path).unwrap()
     );
+}
+
+#[test]
+fn lookup_rowid_reads_expected_multipage_fixture_row() {
+    let db_path = common::fixture_path("multipage.db");
+    let mut pager = Pager::open(&db_path).unwrap();
+    let row = lookup_rowid(&mut pager, 2, 120).unwrap().unwrap();
+
+    assert_eq!(row.rowid, 120);
+    assert_eq!(
+        row.values,
+        vec![
+            Value::Integer(120),
+            Value::Text("row-120-abcdefghijklmnopqrstuvwxyz".to_owned())
+        ]
+    );
+}
+
+#[test]
+fn lookup_rowid_reuses_overflow_payload_loading() {
+    let db_path = common::fixture_path("overflow.db");
+    let mut pager = Pager::open(&db_path).unwrap();
+    let row = lookup_rowid(&mut pager, 2, 1).unwrap().unwrap();
+
+    assert_eq!(row.rowid, 1);
+    assert_eq!(row.values[0], Value::Integer(1));
+    assert_eq!(row.values[1], Value::Text("x".repeat(1800)));
 }
 
 #[test]
