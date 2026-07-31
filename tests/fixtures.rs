@@ -4,7 +4,8 @@ use std::fs::{self, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 
 use oxlite::{
-    BtreePage, Database, Error, PageType, Pager, Schema, SchemaObjectType, Value, scan_table,
+    BtreePage, Database, Error, PageType, Pager, QueryResultRow, Schema, SchemaObjectType, Value,
+    scan_table,
 };
 
 #[test]
@@ -265,6 +266,39 @@ fn execute_sql_rejects_unsupported_sql() {
 }
 
 #[test]
+fn execute_sql_matches_simple_fixture_expected() {
+    let db_path = common::fixture_path("simple.db");
+    let expected_path = common::fixture_path("simple.expected");
+    let mut database = Database::open(&db_path).unwrap();
+    let rows = database.execute_sql("SELECT rowid, a, b FROM t").unwrap();
+
+    assert_eq!(
+        query_rows_to_sqlite_output(&rows),
+        fs::read_to_string(expected_path).unwrap()
+    );
+}
+
+#[test]
+fn execute_sql_matches_selected_column_output() {
+    let db_path = common::fixture_path("simple.db");
+    let mut database = Database::open(&db_path).unwrap();
+    let rows = database.execute_sql("SELECT b FROM t").unwrap();
+
+    assert_eq!(query_rows_to_sqlite_output(&rows), "alpha\nbeta\n");
+}
+
+#[test]
+fn execute_sql_matches_rowid_filter_output() {
+    let db_path = common::fixture_path("simple.db");
+    let mut database = Database::open(&db_path).unwrap();
+    let rows = database
+        .execute_sql("SELECT rowid, a, b FROM t WHERE rowid = 2")
+        .unwrap();
+
+    assert_eq!(query_rows_to_sqlite_output(&rows), "2|20|beta\n");
+}
+
+#[test]
 fn scans_rows_from_multipage_fixture_table() {
     let db_path = common::fixture_path("multipage.db");
     let expected_path = common::fixture_path("multipage.expected");
@@ -299,6 +333,19 @@ fn scans_rows_from_multipage_fixture_table() {
     );
     assert_eq!(
         rows_to_sqlite_output(&rows),
+        fs::read_to_string(expected_path).unwrap()
+    );
+}
+
+#[test]
+fn execute_sql_matches_multipage_fixture_expected() {
+    let db_path = common::fixture_path("multipage.db");
+    let expected_path = common::fixture_path("multipage.expected");
+    let mut database = Database::open(&db_path).unwrap();
+    let rows = database.execute_sql("SELECT rowid, a, b FROM big").unwrap();
+
+    assert_eq!(
+        query_rows_to_sqlite_output(&rows),
         fs::read_to_string(expected_path).unwrap()
     );
 }
@@ -381,6 +428,21 @@ fn scans_rows_from_overflow_fixture_table() {
 }
 
 #[test]
+fn execute_sql_matches_overflow_fixture_expected() {
+    let db_path = common::fixture_path("overflow.db");
+    let expected_path = common::fixture_path("overflow.expected");
+    let mut database = Database::open(&db_path).unwrap();
+    let rows = database
+        .execute_sql("SELECT rowid, a, b FROM large")
+        .unwrap();
+
+    assert_eq!(
+        query_rows_to_sqlite_output(&rows),
+        fs::read_to_string(expected_path).unwrap()
+    );
+}
+
+#[test]
 fn rejects_overflow_chain_that_ends_early() {
     let db_path = copy_fixture_to_temp("overflow.db", "overflow-corrupt");
 
@@ -448,6 +510,20 @@ fn rows_to_sqlite_output(rows: &[oxlite::Row]) -> String {
         output.push_str(&row.rowid.to_string());
         for value in &row.values {
             output.push('|');
+            output.push_str(&value_to_sqlite_output(value));
+        }
+        output.push('\n');
+    }
+    output
+}
+
+fn query_rows_to_sqlite_output(rows: &[QueryResultRow]) -> String {
+    let mut output = String::new();
+    for row in rows {
+        for (index, (_, value)) in row.values().iter().enumerate() {
+            if index > 0 {
+                output.push('|');
+            }
             output.push_str(&value_to_sqlite_output(value));
         }
         output.push('\n');
