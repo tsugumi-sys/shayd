@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -11,6 +12,7 @@ pub struct Pager {
     source: Box<dyn PageSource>,
     header: DatabaseHeader,
     database_size_pages: u32,
+    page_cache: HashMap<u32, Page>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,6 +61,7 @@ impl Pager {
             source,
             header,
             database_size_pages,
+            page_cache: HashMap::new(),
         })
     }
 
@@ -83,15 +86,20 @@ impl Pager {
                 "page number exceeds database size",
             ));
         }
+        if let Some(page) = self.page_cache.get(&page_number) {
+            return Ok(page.clone());
+        }
 
         let page_size = self.header.page_size.get() as usize;
         let offset = u64::from(page_number - 1) * page_size as u64;
         let mut bytes = vec![0; page_size];
         self.source.read_exact_at(offset, &mut bytes)?;
-        Ok(Page {
+        let page = Page {
             number: page_number,
             bytes,
-        })
+        };
+        self.page_cache.insert(page_number, page.clone());
+        Ok(page)
     }
 }
 
@@ -110,6 +118,53 @@ impl FilePageSource {
         Ok(Self {
             file: File::open(path)?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::path::PathBuf;
+    use std::rc::Rc;
+
+    use super::*;
+
+    #[test]
+    fn repeated_page_reads_use_cache() {
+        let read_count = Rc::new(Cell::new(0));
+        let source = CountingPageSource {
+            bytes: include_bytes!("../tests/fixtures/simple.db").to_vec(),
+            read_count: Rc::clone(&read_count),
+        };
+        let mut pager = Pager::from_source(PathBuf::from("<counting>"), Box::new(source)).unwrap();
+
+        assert_eq!(read_count.get(), 1);
+
+        let first = pager.read_page(1).unwrap();
+        let second = pager.read_page(1).unwrap();
+
+        assert_eq!(first, second);
+        assert_eq!(read_count.get(), 2);
+    }
+
+    #[derive(Debug)]
+    struct CountingPageSource {
+        bytes: Vec<u8>,
+        read_count: Rc<Cell<usize>>,
+    }
+
+    impl PageSource for CountingPageSource {
+        fn len(&self) -> Result<u64> {
+            Ok(self.bytes.len() as u64)
+        }
+
+        fn read_exact_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<()> {
+            self.read_count.set(self.read_count.get() + 1);
+            let offset = offset as usize;
+            let end = offset + buf.len();
+            buf.copy_from_slice(&self.bytes[offset..end]);
+            Ok(())
+        }
     }
 }
 
