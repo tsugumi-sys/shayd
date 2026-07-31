@@ -43,6 +43,7 @@ pub struct ColumnSchema {
 pub struct IndexSchema {
     pub name: String,
     pub table_name: String,
+    pub root_page: Option<u32>,
     pub columns: Vec<String>,
     pub unique: bool,
 }
@@ -131,7 +132,11 @@ impl SchemaObject {
             _ => None,
         };
         let index_schema = match (object_type, sql.as_deref()) {
-            (SchemaObjectType::Index, Some(sql)) => Some(IndexSchema::parse(sql)?),
+            (SchemaObjectType::Index, Some(sql)) => {
+                let mut index_schema = IndexSchema::parse(sql)?;
+                index_schema.root_page = root_page;
+                Some(index_schema)
+            }
             _ => None,
         };
 
@@ -243,6 +248,7 @@ impl IndexSchema {
         Ok(Self {
             name,
             table_name,
+            root_page: None,
             columns: vec![column_name],
             unique,
         })
@@ -427,6 +433,7 @@ mod tests {
             Some(IndexSchema {
                 name: "idx_t_a".to_owned(),
                 table_name: "t".to_owned(),
+                root_page: Some(3),
                 columns: vec!["a".to_owned()],
                 unique: false,
             })
@@ -468,6 +475,7 @@ mod tests {
             IndexSchema {
                 name: "idx_t_a".to_owned(),
                 table_name: "t".to_owned(),
+                root_page: None,
                 columns: vec!["a".to_owned()],
                 unique: false,
             }
@@ -481,6 +489,7 @@ mod tests {
             IndexSchema {
                 name: "idx_t_a".to_owned(),
                 table_name: "t".to_owned(),
+                root_page: None,
                 columns: vec!["a".to_owned()],
                 unique: true,
             }

@@ -2,6 +2,9 @@ use crate::error::{Error, Result};
 
 const DATABASE_HEADER_SIZE: usize = 100;
 const MAGIC: &[u8; 16] = b"SQLite format 3\0";
+pub(crate) const MAX_EMBEDDED_PAYLOAD_FRACTION: usize = 64;
+pub(crate) const MIN_EMBEDDED_PAYLOAD_FRACTION: usize = 32;
+pub(crate) const LEAF_PAYLOAD_FRACTION: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PageSize(u32);
@@ -104,9 +107,9 @@ impl DatabaseHeader {
         let max_embedded_payload_fraction = bytes[21];
         let min_embedded_payload_fraction = bytes[22];
         let leaf_payload_fraction = bytes[23];
-        if max_embedded_payload_fraction != 64
-            || min_embedded_payload_fraction != 32
-            || leaf_payload_fraction != 32
+        if usize::from(max_embedded_payload_fraction) != MAX_EMBEDDED_PAYLOAD_FRACTION
+            || usize::from(min_embedded_payload_fraction) != MIN_EMBEDDED_PAYLOAD_FRACTION
+            || usize::from(leaf_payload_fraction) != LEAF_PAYLOAD_FRACTION
         {
             return Err(Error::InvalidDatabaseHeader("invalid payload fractions"));
         }

@@ -145,6 +145,7 @@ fn loads_index_metadata_from_indexed_fixture() {
         Some(&IndexSchema {
             name: "idx_items_a".to_owned(),
             table_name: "items".to_owned(),
+            root_page: Some(3),
             columns: vec!["a".to_owned()],
             unique: false,
         })
@@ -154,11 +155,77 @@ fn loads_index_metadata_from_indexed_fixture() {
         Some(&IndexSchema {
             name: "idx_items_b".to_owned(),
             table_name: "items".to_owned(),
+            root_page: Some(4),
             columns: vec!["b".to_owned()],
             unique: true,
         })
     );
     assert!(schema.index_for_table_column("items", "missing").is_none());
+}
+
+#[test]
+fn reads_index_leaf_cells_from_indexed_fixture() {
+    let db_path = common::fixture_path("indexed.db");
+    let mut pager = Pager::open(&db_path).unwrap();
+    let schema = Schema::load(&mut pager).unwrap();
+    let index = schema.index_for_table_column("items", "a").unwrap();
+    let page = pager.read_page(index.root_page.unwrap()).unwrap();
+    let btree_page = BtreePage::parse(&page).unwrap();
+    let cells = btree_page
+        .index_leaf_cells(&page, pager.header().usable_space() as usize)
+        .unwrap();
+
+    assert_eq!(btree_page.header().page_type, PageType::IndexLeaf);
+    assert_eq!(cells.len(), 3);
+    assert_eq!(
+        cells
+            .iter()
+            .map(|cell| cell.record.values().to_vec())
+            .collect::<Vec<_>>(),
+        vec![
+            vec![Value::Integer(10), Value::Integer(1)],
+            vec![Value::Integer(20), Value::Integer(2)],
+            vec![Value::Integer(30), Value::Integer(3)],
+        ]
+    );
+}
+
+#[test]
+fn finds_rowids_by_indexed_integer_value_from_fixture() {
+    let db_path = common::fixture_path("indexed.db");
+    let mut pager = Pager::open(&db_path).unwrap();
+    let schema = Schema::load(&mut pager).unwrap();
+    let index = schema.index_for_table_column("items", "a").unwrap();
+    let page = pager.read_page(index.root_page.unwrap()).unwrap();
+    let btree_page = BtreePage::parse(&page).unwrap();
+    let rowids = btree_page
+        .index_leaf_rowids_for_value(
+            &page,
+            pager.header().usable_space() as usize,
+            &Value::Integer(20),
+        )
+        .unwrap();
+
+    assert_eq!(rowids, vec![2]);
+}
+
+#[test]
+fn finds_rowids_by_indexed_text_value_from_fixture() {
+    let db_path = common::fixture_path("indexed.db");
+    let mut pager = Pager::open(&db_path).unwrap();
+    let schema = Schema::load(&mut pager).unwrap();
+    let index = schema.index_for_table_column("items", "b").unwrap();
+    let page = pager.read_page(index.root_page.unwrap()).unwrap();
+    let btree_page = BtreePage::parse(&page).unwrap();
+    let rowids = btree_page
+        .index_leaf_rowids_for_value(
+            &page,
+            pager.header().usable_space() as usize,
+            &Value::Text("beta".to_owned()),
+        )
+        .unwrap();
+
+    assert_eq!(rowids, vec![2]);
 }
 
 #[test]

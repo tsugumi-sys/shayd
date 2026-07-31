@@ -1,7 +1,14 @@
 use crate::error::{Error, Result};
+use crate::header::{MAX_EMBEDDED_PAYLOAD_FRACTION, MIN_EMBEDDED_PAYLOAD_FRACTION, PageSize};
 use crate::pager::Page;
-use crate::record::Record;
+use crate::record::{Record, Value};
 use crate::varint;
+
+const PAYLOAD_FRACTION_DENOMINATOR: usize = 255;
+const LOCAL_PAYLOAD_ADJUSTMENT: usize = 23;
+const INDEX_INTERIOR_HEADER_SIZE: usize = 12;
+const OVERFLOW_POINTER_SIZE: usize = 4;
+const TABLE_LEAF_MAX_LOCAL_PAYLOAD_SUBTRACT: usize = 35;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PageType {
@@ -73,6 +80,13 @@ pub struct TableLeafPayload<'a> {
 pub struct TableInteriorCell {
     pub left_child_page: u32,
     pub rowid: i64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndexLeafCell<'a> {
+    pub payload_size: usize,
+    pub payload: &'a [u8],
+    pub record: Record,
 }
 
 impl BtreePage {
@@ -234,6 +248,46 @@ impl BtreePage {
             .map(|cell_offset| TableInteriorCell::parse(page, usize::from(*cell_offset)))
             .collect()
     }
+
+    pub fn index_leaf_cells<'a>(
+        &self,
+        page: &'a Page,
+        usable_size: usize,
+    ) -> Result<Vec<IndexLeafCell<'a>>> {
+        if self.page_number != page.number() {
+            return Err(Error::InvalidBtreePage(
+                "parsed b-tree page does not match source page",
+            ));
+        }
+        if self.header.page_type != PageType::IndexLeaf {
+            return Err(Error::InvalidBtreePage("expected index leaf page"));
+        }
+
+        self.cell_pointers
+            .iter()
+            .map(|cell_offset| IndexLeafCell::parse(page, usize::from(*cell_offset), usable_size))
+            .collect()
+    }
+
+    pub fn index_leaf_rowids_for_value(
+        &self,
+        page: &Page,
+        usable_size: usize,
+        value: &Value,
+    ) -> Result<Vec<i64>> {
+        self.index_leaf_cells(page, usable_size)?
+            .into_iter()
+            .filter_map(|cell| match cell.record.values() {
+                [indexed_value, .., Value::Integer(rowid)] if indexed_value == value => {
+                    Some(Ok(*rowid))
+                }
+                [indexed_value, ..] if indexed_value == value => {
+                    Some(Err(Error::InvalidBtreePage("index record missing rowid")))
+                }
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 impl<'a> TableLeafCell<'a> {
@@ -339,13 +393,56 @@ impl TableInteriorCell {
     }
 }
 
-fn parse_cell_content_area_offset(raw: u16, page_len: usize) -> Result<usize> {
-    match (raw, page_len) {
-        (0, 65_536) => Ok(65_536),
+impl<'a> IndexLeafCell<'a> {
+    fn parse(page: &'a Page, offset: usize, usable_size: usize) -> Result<Self> {
+        let bytes = page.bytes();
+        if usable_size > bytes.len() {
+            return Err(Error::InvalidBtreePage("usable size exceeds page size"));
+        }
+
+        let cell = bytes
+            .get(offset..)
+            .ok_or_else(|| Error::truncated("index leaf cell", offset + 1, bytes.len()))?;
+        let (payload_size, payload_size_len) = varint::decode(cell)?;
+        let payload_size = usize::try_from(payload_size)
+            .map_err(|_| Error::InvalidBtreePage("payload too large"))?;
+        let payload_start = offset
+            .checked_add(payload_size_len)
+            .ok_or(Error::InvalidBtreePage("index leaf cell offset overflow"))?;
+        let local_payload_size = index_local_payload_size(payload_size, usable_size)?;
+        let local_payload_end =
+            payload_start
+                .checked_add(local_payload_size)
+                .ok_or(Error::InvalidBtreePage(
+                    "index leaf payload offset overflow",
+                ))?;
+        if local_payload_end > usable_size {
+            return Err(Error::InvalidBtreePage("local payload is out of bounds"));
+        }
+        if local_payload_size < payload_size {
+            return Err(Error::Unsupported(
+                "overflow index payloads are not supported",
+            ));
+        }
+
+        let payload = &bytes[payload_start..local_payload_end];
+        let record = Record::decode(payload)?;
+
+        Ok(Self {
+            payload_size,
+            payload,
+            record,
+        })
+    }
+}
+
+fn parse_cell_content_area_offset(raw: u16, usable_size: usize) -> Result<usize> {
+    match (raw, usable_size) {
+        (0, usable_size) if usable_size == PageSize::MAX as usize => Ok(PageSize::MAX as usize),
         (0, _) => Err(Error::InvalidBtreePage(
             "cell content area offset cannot be zero",
         )),
-        (raw, page_len) if usize::from(raw) <= page_len => Ok(usize::from(raw)),
+        (raw, usable_size) if usize::from(raw) <= usable_size => Ok(usize::from(raw)),
         _ => Err(Error::InvalidBtreePage(
             "cell content area offset is out of bounds",
         )),
@@ -353,13 +450,14 @@ fn parse_cell_content_area_offset(raw: u16, page_len: usize) -> Result<usize> {
 }
 
 pub fn table_leaf_local_payload_size(payload_size: usize, usable_size: usize) -> Result<usize> {
-    if usable_size < 35 {
+    if usable_size < TABLE_LEAF_MAX_LOCAL_PAYLOAD_SUBTRACT {
         return Err(Error::InvalidBtreePage("usable size is too small"));
     }
 
-    let max_leaf = usable_size - 35;
-    let min_leaf = ((usable_size - 12) * 32 / 255)
-        .checked_sub(23)
+    let max_leaf = usable_size - TABLE_LEAF_MAX_LOCAL_PAYLOAD_SUBTRACT;
+    let min_leaf = ((usable_size - INDEX_INTERIOR_HEADER_SIZE) * MIN_EMBEDDED_PAYLOAD_FRACTION
+        / PAYLOAD_FRACTION_DENOMINATOR)
+        .checked_sub(LOCAL_PAYLOAD_ADJUSTMENT)
         .ok_or(Error::InvalidBtreePage("usable size is too small"))?;
 
     if payload_size <= max_leaf {
@@ -367,13 +465,42 @@ pub fn table_leaf_local_payload_size(payload_size: usize, usable_size: usize) ->
     }
 
     let overflow_payload_capacity = usable_size
-        .checked_sub(4)
+        .checked_sub(OVERFLOW_POINTER_SIZE)
         .ok_or(Error::InvalidBtreePage("usable size is too small"))?;
     let surplus = min_leaf + ((payload_size - min_leaf) % overflow_payload_capacity);
     if surplus <= max_leaf {
         Ok(surplus)
     } else {
         Ok(min_leaf)
+    }
+}
+
+pub fn index_local_payload_size(payload_size: usize, usable_size: usize) -> Result<usize> {
+    if usable_size < TABLE_LEAF_MAX_LOCAL_PAYLOAD_SUBTRACT {
+        return Err(Error::InvalidBtreePage("usable size is too small"));
+    }
+
+    let max_local = ((usable_size - INDEX_INTERIOR_HEADER_SIZE) * MAX_EMBEDDED_PAYLOAD_FRACTION
+        / PAYLOAD_FRACTION_DENOMINATOR)
+        .checked_sub(LOCAL_PAYLOAD_ADJUSTMENT)
+        .ok_or(Error::InvalidBtreePage("usable size is too small"))?;
+    let min_local = ((usable_size - INDEX_INTERIOR_HEADER_SIZE) * MIN_EMBEDDED_PAYLOAD_FRACTION
+        / PAYLOAD_FRACTION_DENOMINATOR)
+        .checked_sub(LOCAL_PAYLOAD_ADJUSTMENT)
+        .ok_or(Error::InvalidBtreePage("usable size is too small"))?;
+
+    if payload_size <= max_local {
+        return Ok(payload_size);
+    }
+
+    let overflow_payload_capacity = usable_size
+        .checked_sub(OVERFLOW_POINTER_SIZE)
+        .ok_or(Error::InvalidBtreePage("usable size is too small"))?;
+    let surplus = min_local + ((payload_size - min_local) % overflow_payload_capacity);
+    if surplus <= max_local {
+        Ok(surplus)
+    } else {
+        Ok(min_local)
     }
 }
 
@@ -529,6 +656,89 @@ mod tests {
         assert_eq!(table_leaf_local_payload_size(545, 512).unwrap(), 39);
         assert_eq!(table_leaf_local_payload_size(985, 512).unwrap(), 477);
         assert_eq!(table_leaf_local_payload_size(986, 512).unwrap(), 39);
+    }
+
+    #[test]
+    fn parses_index_leaf_cell_record() {
+        let record = Record::new(vec![
+            crate::record::Value::Integer(10),
+            crate::record::Value::Integer(1),
+        ]);
+        let payload = record.encode().unwrap();
+        let cell_offset = 512 - (1 + payload.len());
+        let mut bytes = vec![0; 512];
+        bytes[0] = 0x0a;
+        bytes[3..5].copy_from_slice(&1_u16.to_be_bytes());
+        bytes[5..7].copy_from_slice(&(cell_offset as u16).to_be_bytes());
+        bytes[8..10].copy_from_slice(&(cell_offset as u16).to_be_bytes());
+        bytes[cell_offset] = payload.len() as u8;
+        bytes[cell_offset + 1..cell_offset + 1 + payload.len()].copy_from_slice(&payload);
+        let page = Page::new(2, bytes);
+
+        let btree_page = BtreePage::parse(&page).unwrap();
+        let cells = btree_page.index_leaf_cells(&page, 512).unwrap();
+
+        assert_eq!(cells.len(), 1);
+        assert_eq!(cells[0].payload_size, payload.len());
+        assert_eq!(cells[0].payload, payload.as_slice());
+        assert_eq!(cells[0].record, record);
+    }
+
+    #[test]
+    fn finds_index_leaf_rowids_by_indexed_value() {
+        let first = Record::new(vec![
+            crate::record::Value::Integer(10),
+            crate::record::Value::Integer(1),
+        ])
+        .encode()
+        .unwrap();
+        let second = Record::new(vec![
+            crate::record::Value::Integer(20),
+            crate::record::Value::Integer(2),
+        ])
+        .encode()
+        .unwrap();
+        let second_offset = 512 - (1 + second.len());
+        let first_offset = second_offset - (1 + first.len());
+        let mut bytes = vec![0; 512];
+        bytes[0] = 0x0a;
+        bytes[3..5].copy_from_slice(&2_u16.to_be_bytes());
+        bytes[5..7].copy_from_slice(&(first_offset as u16).to_be_bytes());
+        bytes[8..10].copy_from_slice(&(first_offset as u16).to_be_bytes());
+        bytes[10..12].copy_from_slice(&(second_offset as u16).to_be_bytes());
+        bytes[first_offset] = first.len() as u8;
+        bytes[first_offset + 1..first_offset + 1 + first.len()].copy_from_slice(&first);
+        bytes[second_offset] = second.len() as u8;
+        bytes[second_offset + 1..second_offset + 1 + second.len()].copy_from_slice(&second);
+        let page = Page::new(2, bytes);
+
+        let btree_page = BtreePage::parse(&page).unwrap();
+        let rowids = btree_page
+            .index_leaf_rowids_for_value(&page, 512, &crate::record::Value::Integer(20))
+            .unwrap();
+
+        assert_eq!(rowids, vec![2]);
+    }
+
+    #[test]
+    fn rejects_overflow_index_payloads() {
+        let cell_offset = 450_usize;
+        let mut bytes = vec![0; 512];
+        bytes[0] = 0x0a;
+        bytes[3..5].copy_from_slice(&1_u16.to_be_bytes());
+        bytes[5..7].copy_from_slice(&(cell_offset as u16).to_be_bytes());
+        bytes[8..10].copy_from_slice(&(cell_offset as u16).to_be_bytes());
+        bytes[cell_offset..cell_offset + 2].copy_from_slice(&[0x83, 0x5e]);
+        let page = Page::new(2, bytes);
+
+        let btree_page = BtreePage::parse(&page).unwrap();
+
+        assert!(matches!(
+            btree_page.index_leaf_cells(&page, 512),
+            Err(Error::Unsupported(
+                "overflow index payloads are not supported"
+            ))
+        ));
     }
 
     #[test]

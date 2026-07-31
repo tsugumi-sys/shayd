@@ -10,7 +10,9 @@ mod sql;
 mod table;
 mod varint;
 
-pub use btree::{BtreePage, BtreePageHeader, PageType, TableInteriorCell, TableLeafCell};
+pub use btree::{
+    BtreePage, BtreePageHeader, IndexLeafCell, PageType, TableInteriorCell, TableLeafCell,
+};
 pub use database::{Database, ReadTransaction};
 pub use error::{Error, Result};
 pub use header::{DatabaseHeader, PageSize, TextEncoding};
