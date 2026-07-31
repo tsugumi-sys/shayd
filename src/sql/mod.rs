@@ -2,6 +2,7 @@
 
 pub(crate) mod ast;
 pub(crate) mod lexer;
+pub(crate) mod lower;
 pub(crate) mod parser;
 pub(crate) mod token;
 
@@ -9,9 +10,13 @@ pub(crate) mod token;
 mod tests {
     use super::ast::{Expr, Literal, ProjectionList, SelectStatement};
     use super::lexer::tokenize;
+    use super::lower::lower_select;
     use super::parser::parse_select;
     use super::token::{Keyword, Token};
     use crate::error::Error;
+    use crate::record::Value;
+    use crate::schema::{ColumnSchema, TableSchema};
+    use crate::table::{NamedRow, Row};
 
     #[test]
     fn defines_minimal_select_ast_shape() {
@@ -211,5 +216,98 @@ mod tests {
             parse_select("SELECT FROM t"),
             Err(Error::InvalidSql("expected identifier"))
         ));
+    }
+
+    #[test]
+    fn lowers_wildcard_projection() {
+        let query = lower_select(parse_select("SELECT * FROM t").unwrap()).unwrap();
+        let rows = query.execute(named_rows()).unwrap();
+
+        assert_eq!(
+            rows[0].values(),
+            &[
+                ("a".to_owned(), Value::Integer(10)),
+                ("b".to_owned(), Value::Text("alpha".to_owned())),
+            ]
+        );
+    }
+
+    #[test]
+    fn lowers_named_projection_list() {
+        let query = lower_select(parse_select("SELECT a, b FROM t").unwrap()).unwrap();
+        let rows = query.execute(named_rows()).unwrap();
+
+        assert_eq!(
+            rows[0].values(),
+            &[
+                ("a".to_owned(), Value::Integer(10)),
+                ("b".to_owned(), Value::Text("alpha".to_owned())),
+            ]
+        );
+    }
+
+    #[test]
+    fn lowers_rowid_equality_filter() {
+        let query =
+            lower_select(parse_select("SELECT rowid, a FROM t WHERE rowid = 2").unwrap()).unwrap();
+        let rows = query.execute(named_rows()).unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].values(),
+            &[
+                ("rowid".to_owned(), Value::Integer(2)),
+                ("a".to_owned(), Value::Integer(20)),
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_unsupported_where_during_lowering() {
+        assert!(matches!(
+            lower_select(parse_select("SELECT a FROM t WHERE a = 1").unwrap()),
+            Err(Error::Unsupported("only WHERE rowid equality is supported"))
+        ));
+        assert!(matches!(
+            lower_select(parse_select("SELECT a FROM t WHERE rowid = '2'").unwrap()),
+            Err(Error::Unsupported(
+                "only integer rowid equality is supported"
+            ))
+        ));
+    }
+
+    fn named_rows() -> Vec<NamedRow> {
+        let schema = TableSchema {
+            name: "t".to_owned(),
+            columns: vec![
+                ColumnSchema {
+                    name: "a".to_owned(),
+                    declared_type: None,
+                },
+                ColumnSchema {
+                    name: "b".to_owned(),
+                    declared_type: None,
+                },
+            ],
+        };
+
+        vec![
+            NamedRow::from_row(
+                Row {
+                    rowid: 1,
+                    values: vec![Value::Integer(10), Value::Text("alpha".to_owned())],
+                },
+                &schema,
+            )
+            .unwrap(),
+            NamedRow::from_row(
+                Row {
+                    rowid: 2,
+                    values: vec![Value::Integer(20), Value::Text("beta".to_owned())],
+                },
+                &schema,
+            )
+            .unwrap(),
+        ]
     }
 }

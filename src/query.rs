@@ -3,9 +3,9 @@ use crate::record::Value;
 use crate::table::NamedRow;
 
 #[derive(Debug, Clone)]
-pub struct TableQuery<'a> {
-    table_name: &'a str,
-    projections: Vec<&'a str>,
+pub struct TableQuery {
+    table_name: String,
+    projections: Vec<String>,
     rowid_eq: Option<i64>,
 }
 
@@ -14,21 +14,26 @@ pub struct QueryResultRow {
     values: Vec<(String, Value)>,
 }
 
-impl<'a> TableQuery<'a> {
-    pub fn new(table_name: &'a str) -> Self {
+impl TableQuery {
+    pub fn new(table_name: impl Into<String>) -> Self {
         Self {
-            table_name,
+            table_name: table_name.into(),
             projections: Vec::new(),
             rowid_eq: None,
         }
     }
 
     pub fn table_name(&self) -> &str {
-        self.table_name
+        &self.table_name
     }
 
-    pub fn select<const N: usize>(mut self, projections: [&'a str; N]) -> Self {
-        self.projections = projections.to_vec();
+    pub fn select<const N: usize>(mut self, projections: [&str; N]) -> Self {
+        self.projections = projections.into_iter().map(str::to_owned).collect();
+        self
+    }
+
+    pub(crate) fn select_columns(mut self, projections: Vec<String>) -> Self {
+        self.projections = projections;
         self
     }
 
@@ -41,7 +46,7 @@ impl<'a> TableQuery<'a> {
         let projections: Vec<String> = if self.projections.is_empty() {
             default_projections(rows.first())
         } else {
-            self.projections.into_iter().map(str::to_owned).collect()
+            self.projections
         };
 
         rows.into_iter()

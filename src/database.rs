@@ -46,11 +46,11 @@ impl Database {
         name_rows(rows, &table_schema)
     }
 
-    pub fn query_table<'a>(&self, name: &'a str) -> TableQuery<'a> {
+    pub fn query_table(&self, name: &str) -> TableQuery {
         TableQuery::new(name)
     }
 
-    pub fn execute_table_query(&mut self, query: TableQuery<'_>) -> Result<Vec<QueryResultRow>> {
+    pub fn execute_table_query(&mut self, query: TableQuery) -> Result<Vec<QueryResultRow>> {
         let rows = self.scan_table_named(query.table_name())?;
         query.execute(rows)
     }
