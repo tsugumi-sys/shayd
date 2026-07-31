@@ -6,6 +6,9 @@ pub(crate) mod lower;
 pub(crate) mod parser;
 pub(crate) mod token;
 
+pub(crate) use lower::lower_select;
+pub(crate) use parser::parse_select;
+
 #[cfg(test)]
 mod tests {
     use super::ast::{Expr, Literal, ProjectionList, SelectStatement};

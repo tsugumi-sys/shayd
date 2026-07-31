@@ -189,6 +189,82 @@ fn query_api_rejects_unknown_columns() {
 }
 
 #[test]
+fn execute_sql_projects_all_columns() {
+    let db_path = common::fixture_path("simple.db");
+    let mut database = Database::open(&db_path).unwrap();
+    let rows = database.execute_sql("SELECT * FROM t").unwrap();
+
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].get("a"), Some(&Value::Integer(10)));
+    assert_eq!(rows[0].get("b"), Some(&Value::Text("alpha".to_owned())));
+    assert_eq!(rows[1].get("a"), Some(&Value::Integer(20)));
+    assert_eq!(rows[1].get("b"), Some(&Value::Text("beta".to_owned())));
+}
+
+#[test]
+fn execute_sql_projects_selected_columns() {
+    let db_path = common::fixture_path("simple.db");
+    let mut database = Database::open(&db_path).unwrap();
+    let rows = database.execute_sql("SELECT a, b FROM t").unwrap();
+
+    assert_eq!(
+        rows[0].values(),
+        &[
+            ("a".to_owned(), Value::Integer(10)),
+            ("b".to_owned(), Value::Text("alpha".to_owned()))
+        ]
+    );
+}
+
+#[test]
+fn execute_sql_filters_by_rowid() {
+    let db_path = common::fixture_path("simple.db");
+    let mut database = Database::open(&db_path).unwrap();
+    let rows = database
+        .execute_sql("SELECT rowid, a FROM t WHERE rowid = 2")
+        .unwrap();
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].values(),
+        &[
+            ("rowid".to_owned(), Value::Integer(2)),
+            ("a".to_owned(), Value::Integer(20))
+        ]
+    );
+}
+
+#[test]
+fn execute_sql_preserves_table_and_column_errors() {
+    let db_path = common::fixture_path("simple.db");
+    let mut database = Database::open(&db_path).unwrap();
+
+    assert!(matches!(
+        database.execute_sql("SELECT a FROM missing"),
+        Err(Error::InvalidSchema("table schema not found"))
+    ));
+    assert!(matches!(
+        database.execute_sql("SELECT missing FROM t"),
+        Err(Error::InvalidSchema("unknown projection column"))
+    ));
+}
+
+#[test]
+fn execute_sql_rejects_unsupported_sql() {
+    let db_path = common::fixture_path("simple.db");
+    let mut database = Database::open(&db_path).unwrap();
+
+    assert!(matches!(
+        database.execute_sql("DELETE FROM t"),
+        Err(Error::InvalidSql("expected keyword"))
+    ));
+    assert!(matches!(
+        database.execute_sql("SELECT a FROM t WHERE a = 10"),
+        Err(Error::Unsupported("only WHERE rowid equality is supported"))
+    ));
+}
+
+#[test]
 fn scans_rows_from_multipage_fixture_table() {
     let db_path = common::fixture_path("multipage.db");
     let expected_path = common::fixture_path("multipage.expected");

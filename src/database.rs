@@ -4,6 +4,7 @@ use crate::error::{Error, Result};
 use crate::pager::Pager;
 use crate::query::{QueryResultRow, TableQuery};
 use crate::schema::Schema;
+use crate::sql::{lower_select, parse_select};
 use crate::table::{NamedRow, Row, name_rows, scan_table};
 
 #[derive(Debug)]
@@ -53,5 +54,11 @@ impl Database {
     pub fn execute_table_query(&mut self, query: TableQuery) -> Result<Vec<QueryResultRow>> {
         let rows = self.scan_table_named(query.table_name())?;
         query.execute(rows)
+    }
+
+    pub fn execute_sql(&mut self, sql: &str) -> Result<Vec<QueryResultRow>> {
+        let statement = parse_select(sql)?;
+        let query = lower_select(statement)?;
+        self.execute_table_query(query)
     }
 }
