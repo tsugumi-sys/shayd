@@ -62,8 +62,8 @@ mod tests {
     #[test]
     fn lexer_and_parser_are_stubs_until_next_steps() {
         assert!(matches!(
-            parse_select("SELECT * FROM t"),
-            Err(Error::Unsupported("SQL SELECT parser is not implemented"))
+            parse_select("DELETE FROM t"),
+            Err(Error::InvalidSql(_))
         ));
     }
 
@@ -143,6 +143,73 @@ mod tests {
         assert!(matches!(
             tokenize("SELECT /* abc"),
             Err(Error::InvalidSql("unterminated block comment"))
+        ));
+    }
+
+    #[test]
+    fn parses_wildcard_projection() {
+        assert_eq!(
+            parse_select("SELECT * FROM t").unwrap(),
+            SelectStatement {
+                table_name: "t".to_owned(),
+                projections: ProjectionList::All,
+                where_clause: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_named_projection_list() {
+        assert_eq!(
+            parse_select("SELECT a, b FROM t").unwrap(),
+            SelectStatement {
+                table_name: "t".to_owned(),
+                projections: ProjectionList::Columns(vec!["a".to_owned(), "b".to_owned()]),
+                where_clause: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_where_rowid_equals_integer() {
+        assert_eq!(
+            parse_select("SELECT rowid, a FROM t WHERE rowid = 1").unwrap(),
+            SelectStatement {
+                table_name: "t".to_owned(),
+                projections: ProjectionList::Columns(vec!["rowid".to_owned(), "a".to_owned()]),
+                where_clause: Some(Expr::Equal {
+                    left: Box::new(Expr::Identifier("rowid".to_owned())),
+                    right: Box::new(Expr::Literal(Literal::Integer(1))),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_optional_trailing_semicolon() {
+        assert_eq!(
+            parse_select("SELECT * FROM t;").unwrap(),
+            SelectStatement {
+                table_name: "t".to_owned(),
+                projections: ProjectionList::All,
+                where_clause: None,
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_non_select_statements_and_unsupported_features() {
+        assert!(matches!(
+            parse_select("DELETE FROM t"),
+            Err(Error::InvalidSql("expected keyword"))
+        ));
+        assert!(matches!(
+            parse_select("SELECT * FROM t ORDER BY a"),
+            Err(Error::InvalidSql("unexpected token after SELECT statement"))
+        ));
+        assert!(matches!(
+            parse_select("SELECT FROM t"),
+            Err(Error::InvalidSql("expected identifier"))
         ));
     }
 }
