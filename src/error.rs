@@ -11,6 +11,7 @@ pub enum Error {
     InvalidPageSize(u16),
     InvalidRow(&'static str),
     InvalidSchema(&'static str),
+    InvalidSql(&'static str),
     InvalidTextEncoding(u32),
     InvalidVarint,
     ReservedSerialType(u64),
@@ -49,6 +50,7 @@ impl fmt::Display for Error {
             Self::InvalidPageSize(size) => write!(f, "invalid database page size: {size}"),
             Self::InvalidRow(message) => write!(f, "invalid row: {message}"),
             Self::InvalidSchema(message) => write!(f, "invalid schema: {message}"),
+            Self::InvalidSql(message) => write!(f, "invalid SQL: {message}"),
             Self::InvalidTextEncoding(encoding) => {
                 write!(f, "unsupported database text encoding: {encoding}")
             }

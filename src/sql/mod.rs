@@ -61,10 +61,88 @@ mod tests {
 
     #[test]
     fn lexer_and_parser_are_stubs_until_next_steps() {
-        assert_eq!(tokenize("SELECT * FROM t").unwrap(), Vec::new());
         assert!(matches!(
             parse_select("SELECT * FROM t"),
             Err(Error::Unsupported("SQL SELECT parser is not implemented"))
+        ));
+    }
+
+    #[test]
+    fn tokenizes_basic_select() {
+        assert_eq!(
+            tokenize("SELECT * FROM t").unwrap(),
+            vec![
+                Token::Keyword(Keyword::Select),
+                Token::Star,
+                Token::Keyword(Keyword::From),
+                Token::Identifier("t".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn tokenizes_mixed_case_keywords() {
+        assert_eq!(
+            tokenize("select A FrOm t WhErE rowid = 1").unwrap(),
+            vec![
+                Token::Keyword(Keyword::Select),
+                Token::Identifier("A".to_owned()),
+                Token::Keyword(Keyword::From),
+                Token::Identifier("t".to_owned()),
+                Token::Keyword(Keyword::Where),
+                Token::Identifier("rowid".to_owned()),
+                Token::Equal,
+                Token::Integer(1),
+            ]
+        );
+    }
+
+    #[test]
+    fn tokenizes_identifiers_integers_and_strings() {
+        assert_eq!(
+            tokenize("SELECT a, b FROM t WHERE b = 'it''s ok';").unwrap(),
+            vec![
+                Token::Keyword(Keyword::Select),
+                Token::Identifier("a".to_owned()),
+                Token::Comma,
+                Token::Identifier("b".to_owned()),
+                Token::Keyword(Keyword::From),
+                Token::Identifier("t".to_owned()),
+                Token::Keyword(Keyword::Where),
+                Token::Identifier("b".to_owned()),
+                Token::Equal,
+                Token::String("it's ok".to_owned()),
+                Token::Semicolon,
+            ]
+        );
+    }
+
+    #[test]
+    fn skips_whitespace_and_comments() {
+        assert_eq!(
+            tokenize("SELECT /* columns */ a -- tail\nFROM t").unwrap(),
+            vec![
+                Token::Keyword(Keyword::Select),
+                Token::Identifier("a".to_owned()),
+                Token::Keyword(Keyword::From),
+                Token::Identifier("t".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_or_unterminated_input() {
+        assert!(matches!(
+            tokenize("SELECT @ FROM t"),
+            Err(Error::InvalidSql("invalid character"))
+        ));
+        assert!(matches!(
+            tokenize("SELECT 'abc"),
+            Err(Error::InvalidSql("unterminated string literal"))
+        ));
+        assert!(matches!(
+            tokenize("SELECT /* abc"),
+            Err(Error::InvalidSql("unterminated block comment"))
         ));
     }
 }
