@@ -26,6 +26,13 @@ impl Pager {
         Self::from_source(path, Box::new(source))
     }
 
+    pub fn from_bytes(bytes: impl Into<Vec<u8>>) -> Result<Self> {
+        Self::from_source(
+            PathBuf::from("<memory>"),
+            Box::new(MemoryPageSource::new(bytes)),
+        )
+    }
+
     fn from_source(path: PathBuf, mut source: Box<dyn PageSource>) -> Result<Self> {
         let mut header_bytes = [0; DatabaseHeader::SIZE];
         source.read_exact_at(0, &mut header_bytes)?;
@@ -114,6 +121,40 @@ impl PageSource for FilePageSource {
     fn read_exact_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<()> {
         self.file.seek(SeekFrom::Start(offset))?;
         self.file.read_exact(buf)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct MemoryPageSource {
+    bytes: Vec<u8>,
+}
+
+impl MemoryPageSource {
+    fn new(bytes: impl Into<Vec<u8>>) -> Self {
+        Self {
+            bytes: bytes.into(),
+        }
+    }
+}
+
+impl PageSource for MemoryPageSource {
+    fn len(&self) -> Result<u64> {
+        u64::try_from(self.bytes.len())
+            .map_err(|_| Error::InvalidDatabaseHeader("database image is too large"))
+    }
+
+    fn read_exact_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<()> {
+        let offset = usize::try_from(offset)
+            .map_err(|_| Error::InvalidDatabaseHeader("database offset is too large"))?;
+        let end = offset
+            .checked_add(buf.len())
+            .ok_or(Error::InvalidDatabaseHeader("database offset is too large"))?;
+        let slice = self
+            .bytes
+            .get(offset..end)
+            .ok_or_else(|| Error::truncated("database image", end, self.bytes.len()))?;
+        buf.copy_from_slice(slice);
         Ok(())
     }
 }

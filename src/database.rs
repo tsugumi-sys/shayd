@@ -15,7 +15,16 @@ pub struct Database {
 
 impl Database {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let mut pager = Pager::open(path)?;
+        let pager = Pager::open(path)?;
+        Self::from_pager(pager)
+    }
+
+    pub fn open_bytes(bytes: impl Into<Vec<u8>>) -> Result<Self> {
+        let pager = Pager::from_bytes(bytes)?;
+        Self::from_pager(pager)
+    }
+
+    fn from_pager(mut pager: Pager) -> Result<Self> {
         let schema = Schema::load(&mut pager)?;
         Ok(Self { pager, schema })
     }

@@ -4,8 +4,8 @@ use std::fs::{self, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 
 use oxlite::{
-    BtreePage, Database, Error, PageType, Pager, QueryResultRow, Schema, SchemaObjectType, Value,
-    scan_table,
+    BtreePage, Database, DatabaseHeader, Error, PageType, Pager, QueryResultRow, Schema,
+    SchemaObjectType, Value, scan_table,
 };
 
 #[test]
@@ -23,6 +23,48 @@ fn simple_fixture_is_available() {
         fs::read_to_string(expected_path).unwrap(),
         "1|10|alpha\n2|20|beta\n"
     );
+}
+
+#[test]
+fn opens_simple_fixture_from_memory() {
+    let db_path = common::fixture_path("simple.db");
+    let bytes = fs::read(db_path).unwrap();
+    let mut pager = Pager::from_bytes(bytes).unwrap();
+    let page = pager.read_page(1).unwrap();
+
+    assert_eq!(pager.header().page_size.get(), 4096);
+    assert_eq!(pager.path().to_string_lossy(), "<memory>");
+    assert_eq!(page.number(), 1);
+    assert_eq!(page.bytes().len(), 4096);
+}
+
+#[test]
+fn execute_sql_reads_memory_backed_database() {
+    let db_path = common::fixture_path("simple.db");
+    let expected_path = common::fixture_path("simple.expected");
+    let bytes = fs::read(db_path).unwrap();
+    let mut database = Database::open_bytes(bytes).unwrap();
+    let rows = database.execute_sql("SELECT rowid, a, b FROM t").unwrap();
+
+    assert_eq!(
+        query_rows_to_sqlite_output(&rows),
+        fs::read_to_string(expected_path).unwrap()
+    );
+}
+
+#[test]
+fn rejects_truncated_memory_backed_database() {
+    let db_path = common::fixture_path("simple.db");
+    let mut bytes = fs::read(db_path).unwrap();
+    bytes.truncate(DatabaseHeader::SIZE - 1);
+
+    assert!(matches!(
+        Pager::from_bytes(bytes),
+        Err(Error::Truncated {
+            context: "database image",
+            ..
+        })
+    ));
 }
 
 #[test]
