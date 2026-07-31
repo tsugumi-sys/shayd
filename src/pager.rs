@@ -147,6 +147,17 @@ mod tests {
         assert_eq!(read_count.get(), 2);
     }
 
+    #[test]
+    fn rejects_page_zero_at_pager_boundary() {
+        let mut pager =
+            Pager::from_bytes(include_bytes!("../tests/fixtures/simple.db").to_vec()).unwrap();
+
+        assert!(matches!(
+            pager.read_page(0),
+            Err(Error::InvalidDatabaseHeader("page numbers start at 1"))
+        ));
+    }
+
     #[derive(Debug)]
     struct CountingPageSource {
         bytes: Vec<u8>,

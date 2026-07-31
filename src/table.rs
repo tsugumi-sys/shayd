@@ -91,7 +91,6 @@ fn scan_table_into(
     if depth >= MAX_TABLE_BTREE_DEPTH {
         return Err(Error::InvalidBtreePage("table b-tree depth limit exceeded"));
     }
-    validate_table_page_number(pager, page_number)?;
     if !state.visited_pages.insert(page_number) {
         return Err(Error::InvalidBtreePage("table b-tree cycle detected"));
     }
@@ -132,18 +131,6 @@ fn scan_table_into(
     Ok(())
 }
 
-fn validate_table_page_number(pager: &Pager, page_number: u32) -> Result<()> {
-    if page_number == 0 {
-        return Err(Error::InvalidBtreePage("table page cannot be zero"));
-    }
-
-    if page_number > pager.database_size_pages() {
-        return Err(Error::InvalidBtreePage("table page exceeds database size"));
-    }
-
-    Ok(())
-}
-
 fn read_table_leaf_payload(
     pager: &mut Pager,
     cell: &TableLeafPayload<'_>,
@@ -157,7 +144,6 @@ fn read_table_leaf_payload(
     };
 
     while payload.len() < cell.payload_size {
-        validate_overflow_page_number(pager, overflow_page_number)?;
         let overflow_page = pager.read_page(overflow_page_number)?;
         let bytes = overflow_page.bytes();
         if usable_size > bytes.len() || usable_size < 4 {
@@ -180,18 +166,4 @@ fn read_table_leaf_payload(
     }
 
     Ok(payload)
-}
-
-fn validate_overflow_page_number(pager: &Pager, page_number: u32) -> Result<()> {
-    if page_number == 0 {
-        return Err(Error::InvalidBtreePage("overflow page cannot be zero"));
-    }
-
-    if page_number > pager.database_size_pages() {
-        return Err(Error::InvalidBtreePage(
-            "overflow page exceeds database size",
-        ));
-    }
-
-    Ok(())
 }

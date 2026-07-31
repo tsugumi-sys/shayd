@@ -419,7 +419,9 @@ fn rejects_table_child_page_beyond_database_size() {
 
     assert!(matches!(
         database.scan_table("big"),
-        Err(Error::InvalidBtreePage("table page exceeds database size"))
+        Err(Error::InvalidDatabaseHeader(
+            "page number exceeds database size"
+        ))
     ));
 
     fs::remove_file(db_path).unwrap();
@@ -518,6 +520,48 @@ fn rejects_overflow_chain_that_ends_early() {
     assert!(matches!(
         database.scan_table("large"),
         Err(Error::InvalidBtreePage("overflow chain ended early"))
+    ));
+
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn rejects_overflow_page_beyond_database_size() {
+    let db_path = copy_fixture_to_temp("overflow.db", "overflow-bad-page");
+
+    let mut pager = Pager::open(&db_path).unwrap();
+    let root_page_number = Schema::load(&mut pager)
+        .unwrap()
+        .table("large")
+        .unwrap()
+        .root_page
+        .unwrap();
+    let root_page = pager.read_page(root_page_number).unwrap();
+    let btree_page = BtreePage::parse(&root_page).unwrap();
+    let first_overflow_page = btree_page
+        .table_leaf_payloads(&root_page, pager.header().usable_space() as usize)
+        .unwrap()[0]
+        .first_overflow_page
+        .unwrap();
+
+    let page_size = pager.header().page_size.get() as u64;
+    let bad_page_number = pager.database_size_pages() + 1;
+    drop(pager);
+
+    let mut file = OpenOptions::new().write(true).open(&db_path).unwrap();
+    file.seek(SeekFrom::Start(
+        u64::from(first_overflow_page - 1) * page_size,
+    ))
+    .unwrap();
+    file.write_all(&bad_page_number.to_be_bytes()).unwrap();
+
+    let mut database = Database::open(&db_path).unwrap();
+
+    assert!(matches!(
+        database.scan_table("large"),
+        Err(Error::InvalidDatabaseHeader(
+            "page number exceeds database size"
+        ))
     ));
 
     fs::remove_file(db_path).unwrap();
