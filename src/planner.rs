@@ -21,9 +21,9 @@ pub enum QueryPlan {
 
 pub fn plan_table_query(query: &TableQuery, schema: &Schema) -> Result<QueryPlan> {
     let table_name = query.table_name();
-    let _table = schema
-        .table(table_name)
-        .ok_or(Error::InvalidSchema("table not found"))?;
+    let _table_schema = schema
+        .table_schema(table_name)
+        .ok_or(Error::InvalidSchema("table schema not found"))?;
 
     let Some(filter) = query.equality_filter() else {
         return Ok(QueryPlan::FullTableScan {

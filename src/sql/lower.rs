@@ -28,15 +28,24 @@ fn lower_where_clause(query: TableQuery, where_clause: Expr) -> Result<TableQuer
             "only column equality WHERE clauses are supported",
         ));
     };
-    if column_name != "rowid" {
-        return Err(Error::Unsupported("only WHERE rowid equality is supported"));
-    }
-
-    let Expr::Literal(Literal::Integer(rowid)) = *right else {
+    let Expr::Literal(literal) = *right else {
         return Err(Error::Unsupported(
-            "only integer rowid equality is supported",
+            "only literal equality WHERE clauses are supported",
         ));
     };
+    let value = match literal {
+        Literal::Integer(value) => crate::record::Value::Integer(value),
+        Literal::String(value) => crate::record::Value::Text(value),
+    };
 
-    Ok(query.rowid_eq(rowid))
+    if column_name == "rowid" {
+        let crate::record::Value::Integer(rowid) = value else {
+            return Err(Error::Unsupported(
+                "only integer rowid equality is supported",
+            ));
+        };
+        return Ok(query.rowid_eq(rowid));
+    }
+
+    Ok(query.column_eq(column_name, value))
 }

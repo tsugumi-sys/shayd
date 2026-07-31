@@ -266,11 +266,23 @@ mod tests {
     }
 
     #[test]
+    fn lowers_column_equality_filter() {
+        let query =
+            lower_select(parse_select("SELECT rowid, a FROM t WHERE a = 20").unwrap()).unwrap();
+        let rows = query.execute(named_rows()).unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].values(),
+            &[
+                ("rowid".to_owned(), Value::Integer(2)),
+                ("a".to_owned(), Value::Integer(20)),
+            ]
+        );
+    }
+
+    #[test]
     fn rejects_unsupported_where_during_lowering() {
-        assert!(matches!(
-            lower_select(parse_select("SELECT a FROM t WHERE a = 1").unwrap()),
-            Err(Error::Unsupported("only WHERE rowid equality is supported"))
-        ));
         assert!(matches!(
             lower_select(parse_select("SELECT a FROM t WHERE rowid = '2'").unwrap()),
             Err(Error::Unsupported(

@@ -434,10 +434,6 @@ fn execute_sql_rejects_unsupported_sql() {
         database.execute_sql("DELETE FROM t"),
         Err(Error::InvalidSql("expected keyword"))
     ));
-    assert!(matches!(
-        database.execute_sql("SELECT a FROM t WHERE a = 10"),
-        Err(Error::Unsupported("only WHERE rowid equality is supported"))
-    ));
 }
 
 #[test]
@@ -471,6 +467,50 @@ fn execute_sql_matches_rowid_filter_output() {
         .unwrap();
 
     assert_eq!(query_rows_to_sqlite_output(&rows), "2|20|beta\n");
+}
+
+#[test]
+fn execute_sql_matches_unindexed_equality_filter_output() {
+    let db_path = common::fixture_path("simple.db");
+    let mut database = Database::open(&db_path).unwrap();
+    let rows = database
+        .execute_sql("SELECT rowid, a, b FROM t WHERE a = 20")
+        .unwrap();
+
+    assert_eq!(query_rows_to_sqlite_output(&rows), "2|20|beta\n");
+}
+
+#[test]
+fn execute_sql_uses_indexed_integer_equality_filter() {
+    let db_path = common::fixture_path("indexed.db");
+    let mut database = Database::open(&db_path).unwrap();
+    let rows = database
+        .execute_sql("SELECT rowid, a, b FROM items WHERE a = 20")
+        .unwrap();
+
+    assert_eq!(query_rows_to_sqlite_output(&rows), "2|20|beta\n");
+}
+
+#[test]
+fn execute_sql_uses_indexed_text_equality_filter() {
+    let db_path = common::fixture_path("indexed.db");
+    let mut database = Database::open(&db_path).unwrap();
+    let rows = database
+        .execute_sql("SELECT rowid, a, b FROM items WHERE b = 'beta'")
+        .unwrap();
+
+    assert_eq!(query_rows_to_sqlite_output(&rows), "2|20|beta\n");
+}
+
+#[test]
+fn execute_sql_returns_empty_for_missing_indexed_value() {
+    let db_path = common::fixture_path("indexed.db");
+    let mut database = Database::open(&db_path).unwrap();
+    let rows = database
+        .execute_sql("SELECT rowid, a, b FROM items WHERE a = 999")
+        .unwrap();
+
+    assert!(rows.is_empty());
 }
 
 #[test]

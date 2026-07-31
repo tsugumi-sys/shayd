@@ -1,11 +1,13 @@
 use std::path::Path;
 
+use crate::btree::{BtreePage, PageType};
 use crate::error::{Error, Result};
 use crate::pager::Pager;
+use crate::planner::{QueryPlan, plan_table_query};
 use crate::query::{QueryResultRow, TableQuery};
 use crate::schema::Schema;
 use crate::sql::{lower_select, parse_select};
-use crate::table::{NamedRow, Row, name_rows, scan_table};
+use crate::table::{NamedRow, Row, lookup_rowid, name_rows, scan_table};
 
 #[derive(Debug)]
 pub struct Database {
@@ -100,7 +102,8 @@ impl ReadTransaction<'_> {
     }
 
     pub fn execute_table_query(&mut self, query: TableQuery) -> Result<Vec<QueryResultRow>> {
-        let rows = self.scan_table_named(query.table_name())?;
+        let plan = plan_table_query(&query, self.schema)?;
+        let rows = self.read_rows_for_plan(&plan)?;
         query.execute(rows)
     }
 
@@ -108,5 +111,75 @@ impl ReadTransaction<'_> {
         let statement = parse_select(sql)?;
         let query = lower_select(statement)?;
         self.execute_table_query(query)
+    }
+
+    fn read_rows_for_plan(&mut self, plan: &QueryPlan) -> Result<Vec<NamedRow>> {
+        match plan {
+            QueryPlan::FullTableScan { table_name } => self.scan_table_named(table_name),
+            QueryPlan::RowidLookup { table_name, rowid } => {
+                let table_schema = self
+                    .schema
+                    .table_schema(table_name)
+                    .ok_or(Error::InvalidSchema("table schema not found"))?
+                    .clone();
+                let root_page = self.table_root_page(table_name)?;
+                let Some(row) = lookup_rowid(self.pager, root_page, *rowid)? else {
+                    return Ok(Vec::new());
+                };
+
+                Ok(vec![NamedRow::from_row(row, &table_schema)?])
+            }
+            QueryPlan::IndexLookup {
+                table_name,
+                index_name,
+                value,
+            } => {
+                let table_schema = self
+                    .schema
+                    .table_schema(table_name)
+                    .ok_or(Error::InvalidSchema("table schema not found"))?
+                    .clone();
+                let table_root_page = self.table_root_page(table_name)?;
+                let index = self
+                    .schema
+                    .index(index_name)
+                    .ok_or(Error::InvalidSchema("index not found"))?;
+                let index_root_page = index
+                    .root_page
+                    .ok_or(Error::InvalidSchema("index has no root page"))?;
+                let index_page = self.pager.read_page(index_root_page)?;
+                let usable_size = self.pager.header().usable_space() as usize;
+                let index_btree_page = BtreePage::parse_with_usable_size(&index_page, usable_size)?;
+                if index_btree_page.header().page_type != PageType::IndexLeaf {
+                    return Err(Error::Unsupported(
+                        "index interior traversal is not supported",
+                    ));
+                }
+
+                let rowids = index_btree_page.index_leaf_rowids_for_value(
+                    &index_page,
+                    usable_size,
+                    value,
+                )?;
+                rowids
+                    .into_iter()
+                    .filter_map(
+                        |rowid| match lookup_rowid(self.pager, table_root_page, rowid) {
+                            Ok(Some(row)) => Some(NamedRow::from_row(row, &table_schema)),
+                            Ok(None) => None,
+                            Err(error) => Some(Err(error)),
+                        },
+                    )
+                    .collect()
+            }
+        }
+    }
+
+    fn table_root_page(&self, table_name: &str) -> Result<u32> {
+        self.schema
+            .table(table_name)
+            .ok_or(Error::InvalidSchema("table not found"))?
+            .root_page
+            .ok_or(Error::InvalidSchema("table has no root page"))
     }
 }

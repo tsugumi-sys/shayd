@@ -91,6 +91,13 @@ impl Schema {
             .collect()
     }
 
+    pub fn index(&self, name: &str) -> Option<&IndexSchema> {
+        self.objects
+            .iter()
+            .filter_map(|object| object.index_schema.as_ref())
+            .find(|index| index.name == name)
+    }
+
     pub fn index_for_table_column(
         &self,
         table_name: &str,
