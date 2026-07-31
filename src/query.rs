@@ -6,7 +6,13 @@ use crate::table::NamedRow;
 pub struct TableQuery {
     table_name: String,
     projections: Vec<String>,
-    rowid_eq: Option<i64>,
+    equality_filter: Option<EqualityFilter>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EqualityFilter {
+    column_name: String,
+    value: Value,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -19,7 +25,7 @@ impl TableQuery {
         Self {
             table_name: table_name.into(),
             projections: Vec::new(),
-            rowid_eq: None,
+            equality_filter: None,
         }
     }
 
@@ -38,8 +44,23 @@ impl TableQuery {
     }
 
     pub fn rowid_eq(mut self, rowid: i64) -> Self {
-        self.rowid_eq = Some(rowid);
+        self.equality_filter = Some(EqualityFilter {
+            column_name: "rowid".to_owned(),
+            value: Value::Integer(rowid),
+        });
         self
+    }
+
+    pub fn column_eq(mut self, column_name: impl Into<String>, value: Value) -> Self {
+        self.equality_filter = Some(EqualityFilter {
+            column_name: column_name.into(),
+            value,
+        });
+        self
+    }
+
+    pub(crate) fn equality_filter(&self) -> Option<&EqualityFilter> {
+        self.equality_filter.as_ref()
     }
 
     pub(crate) fn execute(self, rows: Vec<NamedRow>) -> Result<Vec<QueryResultRow>> {
@@ -48,11 +69,34 @@ impl TableQuery {
         } else {
             self.projections
         };
+        let equality_filter = self.equality_filter;
 
         rows.into_iter()
-            .filter(|row| self.rowid_eq.is_none_or(|rowid| row.rowid() == rowid))
+            .filter(|row| {
+                equality_filter
+                    .as_ref()
+                    .is_none_or(|filter| filter.matches(row))
+            })
             .map(|row| project_row(&row, &projections))
             .collect()
+    }
+}
+
+impl EqualityFilter {
+    pub fn column_name(&self) -> &str {
+        &self.column_name
+    }
+
+    pub fn value(&self) -> &Value {
+        &self.value
+    }
+
+    fn matches(&self, row: &NamedRow) -> bool {
+        if self.column_name == "rowid" {
+            return self.value == Value::Integer(row.rowid());
+        }
+
+        row.get(&self.column_name) == Some(&self.value)
     }
 }
 
